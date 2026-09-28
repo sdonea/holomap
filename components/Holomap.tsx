@@ -271,8 +271,9 @@ export default function Holomap() {
     async function pollShips() {
       if (!W || !shipsOn || shipsInflight) return;
       shipsInflight = true;
-      let [w, n] = toLonLat(0, 0);
-      let [e, s] = toLonLat(W, H);
+      const [w0, n] = toLonLat(0, 0);
+      const [e0, s] = toLonLat(W, H);
+      let w = w0, e = e0;
       // ponytail: a view across the date line asks for the whole latitude band; split into two boxes if that gets heavy
       if (w >= e || W / view.scale > 0.999) [w, e] = [-180, 180];
       try {
