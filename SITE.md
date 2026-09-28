@@ -61,6 +61,7 @@ The map reads in layers, lit from the upper left:
   - Colours: cyan cargo, amber tanker, violet passenger, green fishing, red military, blue-grey everything else.
 
 ## Recent changes
+- 2026-09-28: Zooming is smooth now. Current/wind streaks stretch with the map instead of being wiped and redrawn at every scroll tick, and ship blips only merge or split at each doubling of zoom (in between they move with the map).
 - 2026-09-28: Replaced the inland contour rings with real terrain: shaded relief and height bands from elevation data.
 - 2026-09-28: Lakes no longer get the inland contour rings; only the ocean coastline does.
 - 2026-09-28: Added lakes and rivers. Inland ships now sit on real water. Map data file is now ~0.9 MB compressed (was ~0.6 MB).

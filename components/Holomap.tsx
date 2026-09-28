@@ -181,6 +181,34 @@ export default function Holomap() {
         }
       src.set(out);
     };
+    // Zoom keeps the streaks: particles and trails scale about the zoom point (screen p -> a*p + b)
+    // instead of respawning, so zooming reads as one continuous motion.
+    const zoomTrails = (a: number, bx: number, by: number) => {
+      const cx = bx / PIX, cy = by / PIX; // screen px -> low-res grid
+      if (a === 1 && Math.abs(cx) < 0.5 && Math.abs(cy) < 0.5) return;
+      // Zooming out shrinks the particles into the middle; re-scatter the share that belongs in the new
+      // edge band (rejection-sampled outside the shrunk rect) so density stays even.
+      const keep = Math.min(1, a * a);
+      for (let i = 0; i < px.length; i++) {
+        px[i] = px[i] * a + cx;
+        py[i] = py[i] * a + cy;
+        const out = px[i] < 0 || py[i] < 0 || px[i] >= fw || py[i] >= fh;
+        if (!out && Math.random() < keep) continue;
+        for (let n = 0; n < 20; n++) {
+          spawn(i);
+          if (a >= 1 || px[i] < cx || py[i] < cy || px[i] >= cx + a * fw || py[i] >= cy + a * fh) break;
+        }
+      }
+      if (!img) return;
+      const d = new Uint32Array(img.data.buffer), old = d.slice();
+      for (let y = 0; y < fh; y++) {
+        const sy = Math.floor((y + 0.5 - cy) / a);
+        for (let x = 0; x < fw; x++) {
+          const sx = Math.floor((x + 0.5 - cx) / a);
+          d[y * fw + x] = sx >= 0 && sy >= 0 && sx < fw && sy < fh ? old[sy * fw + sx] : 0;
+        }
+      }
+    };
 
     // ---------- interaction ----------
     let fetchTimer = 0;
@@ -203,13 +231,15 @@ export default function Holomap() {
       viewChanged();
     };
     const zoomAt = (sx: number, sy: number, f: number) => {
+      const s0 = view.scale, cx0 = view.cx, cy0 = view.cy;
       const mx = view.cx + (sx - W / 2) / view.scale, my = view.cy + (sy - H / 2) / view.scale;
       view.scale *= f;
       clampView();
       view.cx = mx - (sx - W / 2) / view.scale;
       view.cy = my - (sy - H / 2) / view.scale;
       clampView();
-      respawnAll();
+      const a = view.scale / s0; // actual zoom after clamping
+      zoomTrails(a, (W / 2) * (1 - a) + near(cx0 - view.cx) * view.scale, (H / 2) * (1 - a) + (cy0 - view.cy) * view.scale);
       viewChanged();
     };
 
@@ -277,7 +307,10 @@ export default function Holomap() {
       const ox = view.cx * view.scale - W / 2, oy = view.cy * view.scale - H / 2; // screen px -> map-pinned px
       // At max zoom a blip could never be split, so only ships practically on top of each other group,
       // and those fan out instead of merging.
-      const atMax = view.scale >= maxScale() * 0.999, cell = atMax ? 10 : CELL;
+      // Groups are fixed per zoom level (each doubling of scale), not per scroll tick: between levels the
+      // cell grows with the map (CELL..2*CELL px), so blips glide with it and only split/merge at a level.
+      const atMax = view.scale >= maxScale() * 0.999;
+      const cell = atMax ? 10 : (CELL * view.scale) / 2 ** Math.floor(Math.log2(view.scale));
       const cells = new Map<string, { ci: number; cj: number; sx: number; sy: number; ships: Ship[] }>();
       for (const sh of ships) {
         const [x, y] = toScreen(sh.x, sh.y);
@@ -304,7 +337,7 @@ export default function Holomap() {
         }
         const r = Math.min(13, 4 + 2.2 * Math.log2(n));
         // centroid, kept inside its own cell (leaving room for the count) so blips never overlap
-        const x0 = c.ci * CELL - ox + r + 2, y0 = c.cj * CELL - oy + r + 2, span = CELL - 2 * r - 28;
+        const x0 = c.ci * cell - ox + r + 2, y0 = c.cj * cell - oy + r + 2, span = cell - 2 * r - 28;
         const x = Math.round(Math.min(x0 + span, Math.max(x0, c.sx / n)));
         const y = Math.round(Math.min(y0 + span, Math.max(y0, c.sy / n)));
         marks.push({ x, y, r, ships: c.ships, kinds });
