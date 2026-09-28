@@ -75,6 +75,7 @@ export async function GET() {
   return new Response(body, {
     headers: {
       "content-type": "application/octet-stream",
+      "x-grid": `-180,-90,${STEP},${COLS},${ROWS}`,
       "x-valid-time": valid,
       "x-gfs-run": run,
       "cache-control": "public, max-age=600, s-maxage=1800, stale-while-revalidate=3600",

@@ -1,15 +1,11 @@
-// Run: node lib/geo.check.ts   — fails loudly if current direction math breaks.
+// Run: node lib/geo.check.ts   — fails loudly if map/flow maths breaks.
 import assert from "node:assert/strict";
-import { toUV, sample, toMerc, fromMerc, pickStep, rhumb, type Field } from "./geo.ts";
+import { sample, toMerc, fromMerc, rhumb, type Field } from "./geo.ts";
 
 const near = (a: number, b: number, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
-// Direction convention: heading TOWARD. 3.6 km/h = 1 m/s.
-let [u, v] = toUV(3.6, 0); near(u, 0); near(v, 1); // going north
-[u, v] = toUV(3.6, 90); near(u, 1); near(v, 0); // going east
-[u, v] = toUV(3.6, 180); near(u, 0); near(v, -1); // going south
-[u, v] = toUV(3.6, 270); near(u, -1); near(v, 0); // going west
-[u, v] = toUV(7.2, 45); near(u, Math.SQRT2); near(v, Math.SQRT2); // NE, 2 m/s
+// 1 m/s heading toward compass direction d (0 = north, 90 = east) as [east, north].
+const toUV = (d: number): [number, number] => [Math.sin((d * Math.PI) / 180), Math.cos((d * Math.PI) / 180)];
 
 // Screen: north is up (merc y decreases going north), east is right.
 const [x0, y0] = toMerc(-70, 36), [x1, y1] = toMerc(-69, 37);
@@ -21,14 +17,16 @@ const f: Field = {
   step: 1, lon0: 0, lat0: 0, cols: 2, rows: 2, time: "",
   u: new Float32Array(4), v: new Float32Array(4), ok: new Uint8Array([1, 1, 1, 1]),
 };
-[[0, 350], [1, 10], [2, 350], [3, 10]].forEach(([i, d]) => ([f.u[i], f.v[i]] = toUV(3.6, d)));
+[[0, 350], [1, 10], [2, 350], [3, 10]].forEach(([i, d]) => ([f.u[i], f.v[i]] = toUV(d)));
 const s = sample(f, 0.5, 0.5)!;
 assert.ok(s[1] > 0.9 && Math.abs(s[0]) < 1e-6);
+assert.deepEqual(sample(f, 360.5, 0.5), s); // the map repeats east-west: lon 360.5 is lon 0.5
+assert.deepEqual(sample(f, -359.5, 0.5), s);
 
 // Land corners are dropped; all-land returns null.
 f.ok.set([1, 0, 0, 0]);
 assert.equal(sample(f, 0.9, 0.9), null);
-near(sample(f, 0.1, 0.1)![1], toUV(3.6, 350)[1], 1e-6);
+near(sample(f, 0.1, 0.1)![1], toUV(350)[1], 1e-6);
 
 // Bearing tool: compass bearings (0 = N, clockwise) and rhumb distances.
 near(rhumb(0, 0, 0, 1).bearing, 0); near(rhumb(0, 0, 0, 1).km, 111.195, 1e-3); // 1° of latitude
@@ -44,8 +42,4 @@ near(rhumb(179.5, 0, -179.5, 0).bearing, 90); // crossing the date line goes the
   near(screen, rhumb(-74, 40.5, -9.1, 38.7).bearing, 1e-9);
 }
 
-assert.equal(pickStep(24), 1);
-assert.equal(pickStep(32), 1.5);
-assert.equal(pickStep(0.5), 0.08);
-assert.equal(pickStep(9999), 8);
 console.log("geo checks ok");

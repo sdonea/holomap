@@ -10,14 +10,6 @@ export function fromMerc(x: number, y: number): [number, number] {
   return [x * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI];
 }
 
-// Open-Meteo ocean_current_direction is where the water is GOING: 0° = north, 90° = east.
-// Returns [east, north] in m/s. Mercator is conformal, so on screen: dx = east, dy = -north.
-export function toUV(kmh: number, dirDeg: number): [number, number] {
-  const ms = kmh / 3.6;
-  const r = (dirDeg * Math.PI) / 180;
-  return [ms * Math.sin(r), ms * Math.cos(r)];
-}
-
 // Rhumb line (constant compass heading) between two points. On Mercator a straight line IS a rhumb
 // line, so this bearing matches the arrow drawn on screen exactly. Bearing in degrees true
 // (0 = north, clockwise), distance in km. Formulas: Movable Type "rhumb lines".
@@ -48,6 +40,7 @@ export type Field = {
 // Bilinear on u/v (never on angles, which break at 359° -> 0°). Land corners are dropped
 // and the remaining weights renormalised, so flow runs right up to the coast.
 export function sample(f: Field, lon: number, lat: number): [number, number] | null {
+  lon = ((((lon + 180) % 360) + 360) % 360) - 180; // the map repeats east-west, so any longitude is valid
   const gx = (lon - f.lon0) / f.step;
   const gy = (lat - f.lat0) / f.step;
   const i = Math.floor(gx);
@@ -67,12 +60,4 @@ export function sample(f: Field, lon: number, lat: number): [number, number] | n
   }
   // Mostly-land cell: treat as land rather than extrapolate one far corner.
   return w < 0.25 ? null : [u / w, v / w];
-}
-
-// Grid step (degrees) so a view spanning `lonSpan` gets at most ~`target` columns.
-// Open-Meteo bills per point, so this is the knob trading sharpness against the free-tier budget.
-// Floor is 0.08°, the model's native resolution; finer would only interpolate.
-const STEPS = [0.08, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
-export function pickStep(lonSpan: number, target = 24): number {
-  return STEPS.find((s) => s >= lonSpan / target) ?? 8;
 }

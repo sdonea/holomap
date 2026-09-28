@@ -1,6 +1,10 @@
 # One-off: shrink Natural Earth land + bathymetry into public/geo.json
 # Usage: python3 scripts/build_geo.py <dir with Natural Earth .geojson> public/geo.json
 # Land = closed rings (filled). Depth = open polylines (only stroked), with artificial edges removed.
+# Fill = the same depth areas as closed rings (coarser), for shading deeper water darker; the
+# artificial edges don't matter there because fills are never stroked.
+# Lakes = closed rings cut out of the land (none are already holes in ne_50m_land).
+# Rivers = open polylines keyed by Natural Earth scalerank (1 = biggest), so small ones can hide when zoomed out.
 # Coordinates are flat, delta-encoded int arrays: [lon*100, lat*100, dlon, dlat, ...].
 import json, sys, os, math
 
@@ -51,7 +55,7 @@ def encode(pts, q, min_extent, min_pts):
 
 src, dst = sys.argv[1], sys.argv[2]
 land = [e for e in (encode(r, 0.02, 0.0, 4) for r in rings(f"{src}/ne_50m_land.geojson")) if e]
-geo = {"land": land, "depth": {}}
+geo = {"land": land, "depth": {}, "fill": {}}
 for name, d, q, ext in [("K_200", 200, 0.05, 0.3), ("J_1000", 1000, 0.05, 0.5), ("I_2000", 2000, 0.1, 1),
                         ("H_3000", 3000, 0.1, 1), ("G_4000", 4000, 0.1, 1.5)]:
     lines = []
@@ -60,5 +64,15 @@ for name, d, q, ext in [("K_200", 200, 0.05, 0.3), ("J_1000", 1000, 0.05, 0.5), 
             e = encode(piece, q, ext, 2)
             if e: lines.append(e)
     geo["depth"][d] = lines
+    geo["fill"][d] = [e for e in (encode(r, 0.15, 1.0, 4) for r in rings(f"{src}/ne_10m_bathymetry_{name}.geojson")) if e]
+geo["lakes"] = [e for e in (encode(r, 0.02, 0.0, 4) for r in rings(f"{src}/ne_50m_lakes.geojson")) if e]
+geo["rivers"] = {}
+for f in json.load(open(f"{src}/ne_10m_rivers_lake_centerlines.geojson"))["features"]:
+    if f["properties"]["featurecla"] != "River": continue  # centerlines through lakes would cross open water
+    g = f["geometry"]
+    for line in [g["coordinates"]] if g["type"] == "LineString" else g["coordinates"]:
+        e = encode(line, 0.005, 0.0, 2)  # finer than land: rivers are thin, so steps show when zoomed in
+        if e: geo["rivers"].setdefault(int(f["properties"]["scalerank"]), []).append(e)
 json.dump(geo, open(dst, "w"), separators=(",", ":"))
-print(os.path.getsize(dst), {k: len(v) for k, v in geo["depth"].items()}, len(geo["land"]))
+print(os.path.getsize(dst), {k: len(v) for k, v in geo["depth"].items()}, {k: len(v) for k, v in geo["fill"].items()}, len(geo["land"]),
+      "lakes", len(geo["lakes"]), "rivers", {k: len(v) for k, v in sorted(geo["rivers"].items())})
