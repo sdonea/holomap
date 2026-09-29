@@ -48,3 +48,11 @@ next-env.d.ts
 
 # personal Claude Code settings
 .claude/settings.local.json
+
+# local AI-assistant and build notes (kept on disk, not in the repo)
+.claude/
+.mcp.json
+CLAUDE.md
+PLAN.md
+PORTFOLIO_PLAN.md
+SITE.md
