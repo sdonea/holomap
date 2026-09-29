@@ -3,13 +3,17 @@
 // connections, so this server holds ONE websocket and the map polls GET /api/ships?w=&s=&e=&n=.
 // The subscription covers every area requested in the last minute, so we only stream what's viewed.
 //
-// ponytail: in-memory state in one long-lived process. Fine for `next dev`/a single server; on
-// serverless (Vercel) each cold instance reconnects and starts empty. Upgrade: a small always-on
+// On Vercel the instance is paused once a response is sent, which would freeze the socket. So every
+// request keeps the instance awake (after(), i.e. waitUntil) until nobody has asked for a minute.
+// ponytail: in-memory state per instance. A cold instance reconnects and starts empty, and viewers
+// landing on different instances each see only what theirs has heard. Upgrade: a small always-on
 // worker writing to Redis/KV, with this route reading from it.
+import { after } from "next/server";
 
 const WS_URL = "wss://stream.aisstream.io/v0/stream";
 const SHIP_TTL = 30 * 60 * 1000; // drop ships not heard from in 30 min
 const BOX_TTL = 60 * 1000;
+const AWAKE_MAX = 250_000; // one request's keep-awake stays under Vercel's 300 s function limit
 const MAX_SHIPS = 20000;
 // Past course for the ship panel: reported positions from the last 6 h, at most one per 30 s, and a
 // ship sitting still only adds a point every 10 min. Kept only while this process runs.
@@ -31,6 +35,7 @@ type State = {
   sentKey: string;
   lastSend: number;
   retry: number;
+  lastReq?: number;
 };
 
 // Survive Next dev hot-reloads so we don't open a new socket on every edit (aisstream allows 3).
@@ -155,6 +160,12 @@ function connect() {
 
 export async function GET(req: Request) {
   const q = new URL(req.url).searchParams;
+  st.lastReq = Date.now();
+  after(async () => {
+    const start = Date.now();
+    while (Date.now() - (st.lastReq ?? 0) < BOX_TTL && Date.now() - start < AWAKE_MAX)
+      await new Promise((r) => setTimeout(r, 1000));
+  });
   // ?mmsi=N: everything we know about one ship (the ship panel polls this while it's open)
   if (q.has("mmsi")) {
     const sh = st.ships.get(Number(q.get("mmsi")));
