@@ -11,8 +11,17 @@ const WS_URL = "wss://stream.aisstream.io/v0/stream";
 const SHIP_TTL = 30 * 60 * 1000; // drop ships not heard from in 30 min
 const BOX_TTL = 60 * 1000;
 const MAX_SHIPS = 20000;
+// Past course for the ship panel: reported positions from the last 6 h, at most one per 30 s, and a
+// ship sitting still only adds a point every 10 min. Kept only while this process runs.
+// ponytail: in memory, up to 720 points per ship; move to a DB if tracks must survive restarts
+const TRACK_MS = 6 * 3600 * 1000, TRACK_GAP = 30_000, TRACK_STILL = 10 * 60_000;
 
-type Ship = { mmsi: number; lat: number; lon: number; cog: number | null; sog: number; hdg: number | null; name: string; type: number; t: number };
+type Ship = {
+  mmsi: number; lat: number; lon: number; cog: number | null; sog: number; hdg: number | null; name: string; type: number; t: number;
+  // static/voyage data (ShipStaticData, every ~6 min) + nav status (position reports), for the ship panel
+  trk?: number[]; // [t, lon, lat, t, lon, lat, ...] oldest first
+  cls?: "A" | "B"; nav?: number; call?: string; imo?: number; dest?: string; eta?: string; len?: number; beam?: number; draught?: number;
+};
 type Box = { w: number; s: number; e: number; n: number; t: number };
 type State = {
   ws: WebSocket | null;
@@ -27,11 +36,29 @@ type State = {
 // Survive Next dev hot-reloads so we don't open a new socket on every edit (aisstream allows 3).
 const g = globalThis as unknown as { __ais?: State };
 const st: State = (g.__ais ??= { ws: null, ships: new Map(), boxes: [], status: "CONNECTING", sentKey: "", lastSend: 0, retry: 0 });
+// ...but a surviving socket still runs the previous module's handlers, so reconnect with this code.
+if (st.ws) { const old = st.ws; st.ws = null; old.close(); }
+
+type Dim = { A?: number; B?: number; C?: number; D?: number };
+// Call sign + size, shared by Class A (ShipStaticData) and Class B (StaticDataReport part B).
+// AIS "not available" is 0 / blank / @-padding throughout.
+function setHull(ship: Ship, call?: string, d?: Dim) {
+  ship.call = call?.replace(/@/g, "").trim() || ship.call;
+  if (d && (d.A || d.B)) ship.len = (d.A ?? 0) + (d.B ?? 0);
+  if (d && (d.C || d.D)) ship.beam = (d.C ?? 0) + (d.D ?? 0);
+}
 
 type Msg = {
   MessageType?: string;
   MetaData?: { MMSI?: number; ShipName?: string; latitude?: number; longitude?: number; Latitude?: number; Longitude?: number };
-  Message?: Record<string, { Latitude?: number; Longitude?: number; Cog?: number; Sog?: number; TrueHeading?: number; Name?: string; Type?: number; Valid?: boolean }>;
+  Message?: Record<string, {
+    Latitude?: number; Longitude?: number; Cog?: number; Sog?: number; TrueHeading?: number; Name?: string; Type?: number; Valid?: boolean;
+    NavigationalStatus?: number; CallSign?: string; ImoNumber?: number; Destination?: string; MaximumStaticDraught?: number;
+    Eta?: { Month?: number; Day?: number; Hour?: number; Minute?: number };
+    Dimension?: Dim;
+    ReportA?: { Valid?: boolean; Name?: string }; // StaticDataReport (Class B) comes in two parts
+    ReportB?: { Valid?: boolean; ShipType?: number; CallSign?: string; Dimension?: Dim };
+  }>;
 };
 
 function onMessage(raw: string) {
@@ -50,6 +77,20 @@ function onMessage(raw: string) {
   if (type === "ShipStaticData") {
     if (body.Name?.trim()) ship.name = body.Name.trim();
     if (body.Type) ship.type = body.Type;
+    setHull(ship, body.CallSign, body.Dimension);
+    ship.imo = body.ImoNumber || ship.imo;
+    ship.dest = body.Destination?.replace(/@/g, "").trim() || ship.dest;
+    ship.draught = body.MaximumStaticDraught || ship.draught;
+    const e = body.Eta; // month 0 / hour 24 / minute 60 = not available
+    if (e?.Month && e.Day && (e.Hour ?? 24) < 24 && (e.Minute ?? 60) < 60)
+      ship.eta = `${"JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split(" ")[e.Month - 1] ?? "?"} ${String(e.Day).padStart(2, "0")} ${String(e.Hour).padStart(2, "0")}:${String(e.Minute).padStart(2, "0")} UTC`;
+  } else if (type === "StaticDataReport") { // Class B small craft: never send destination/ETA/draught/IMO
+    const a = body.ReportA, b = body.ReportB;
+    if (a?.Valid && a.Name?.replace(/@/g, "").trim()) ship.name = a.Name.replace(/@/g, "").trim();
+    if (b?.Valid) {
+      if (b.ShipType) ship.type = b.ShipType;
+      setHull(ship, b.CallSign, b.Dimension);
+    }
   } else if (type.endsWith("PositionReport")) {
     const { Latitude: lat, Longitude: lon } = body;
     // AIS "not available" sentinels (ITU-R M.1371): lat 91, lon 181, COG 360, heading 511, SOG 102.3
@@ -59,7 +100,15 @@ function onMessage(raw: string) {
     ship.cog = body.Cog != null && body.Cog < 360 ? body.Cog : null;
     ship.hdg = body.TrueHeading != null && body.TrueHeading < 360 ? body.TrueHeading : null;
     ship.sog = body.Sog != null && body.Sog < 102.3 ? body.Sog : 0;
+    if (body.NavigationalStatus != null && body.NavigationalStatus < 15) ship.nav = body.NavigationalStatus;
     ship.t = now;
+    ship.cls = type === "PositionReport" ? "A" : "B";
+    const trk = (ship.trk ??= []), n = trk.length;
+    const moved = !n || Math.abs(trk[n - 2] - lon) + Math.abs(trk[n - 1] - lat) > 0.0003; // ~30 m
+    if (!n || now - trk[n - 3] >= (moved ? TRACK_GAP : TRACK_STILL)) trk.push(now, lon, lat);
+    let old = 0;
+    while (old < trk.length && trk[old] < now - TRACK_MS) old += 3;
+    if (old) trk.splice(0, old);
   } else return;
 
   st.ships.set(mmsi, ship);
@@ -82,7 +131,7 @@ function subscribe() {
   if (sig === st.sentKey || now - st.lastSend < 1100) return; // their limit: 1 update/s
   st.sentKey = sig;
   st.lastSend = now;
-  ws.send(JSON.stringify({ APIKey: key, BoundingBoxes: boxes, FilterMessageTypes: ["PositionReport", "StandardClassBPositionReport", "ExtendedClassBPositionReport", "ShipStaticData"] }));
+  ws.send(JSON.stringify({ APIKey: key, BoundingBoxes: boxes, FilterMessageTypes: ["PositionReport", "StandardClassBPositionReport", "ExtendedClassBPositionReport", "ShipStaticData", "StaticDataReport"] }));
 }
 
 function connect() {
@@ -106,6 +155,15 @@ function connect() {
 
 export async function GET(req: Request) {
   const q = new URL(req.url).searchParams;
+  // ?mmsi=N: everything we know about one ship (the ship panel polls this while it's open)
+  if (q.has("mmsi")) {
+    const sh = st.ships.get(Number(q.get("mmsi")));
+    const live = sh && Number.isFinite(sh.lat) && Date.now() - sh.t < SHIP_TTL;
+    if (!live) return Response.json({ status: st.status, ship: null });
+    const { trk = [], ...rest } = sh;
+    const track = trk.filter((_, i) => i % 3); // [lon, lat, lon, lat, ...] oldest first
+    return Response.json({ status: st.status, ship: { ...rest, track, age: Math.round((Date.now() - sh.t) / 1000) } });
+  }
   const [w, s, e, n] = ["w", "s", "e", "n"].map((k) => Number(q.get(k)));
   if (![w, s, e, n].every(Number.isFinite) || w >= e || s >= n || Math.abs(s) > 90 || Math.abs(n) > 90)
     return Response.json({ error: "need w<e, s<n bounds in degrees" }, { status: 400 });
