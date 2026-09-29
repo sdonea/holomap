@@ -3,7 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { fromMerc, rhumb, sample, toMerc, type Field } from "@/lib/geo";
 import { loadGrid, loadWindForecast, type Layer } from "@/lib/currents";
-import { gcAt, gcMetres, planRoute, type LandMask, type Route } from "@/lib/route";
+import { gcAt, gcMetres, legSeconds, planRoute, windAt, type Env, type LandMask, type LonLat, type Route, type WindSeries } from "@/lib/route";
+import { matchDestination, parseAisEta } from "@/lib/ports";
+import { DEFAULT_MARKET, type Market } from "@/lib/economics";
+import RoutePanel, { type PlayState, type RouteInfo } from "./RoutePanel";
+import AboutPanel from "./AboutPanel";
+import Toolbar, { type Tool } from "./Toolbar";
 
 const TABLE = 0.84; // the map takes 84% of the screen each way when tilted; flat view is the same table scaled up by 1/TABLE
 const PIX = 3; // one current "pixel" = 3x3 CSS px, upscaled with nearest-neighbour
@@ -20,11 +25,10 @@ const MS_TO_KN = 1.943844;
 const START = { lon: -71, lat: 36.5, widthKm: 2600 }; // Gulf Stream off Cape Hatteras
 const NICE_KM = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
 const LAND = "#0d3b50";
-// Route planner calibration: ship speed choices (knots), fuel burn of a typical ~40,000 t cargo ship at 12 kn
-// (tonnes/day; burn scales with speed cubed), and the shallowest sea it will enter (12 m draught + margin).
+// Route planner calibration: ship speed choices (knots) and the shallowest sea it will enter (12 m draught +
+// margin). Fuel burn and prices live in lib/economics.ts.
 const SPEEDS = [6, 8, 10, 12, 14, 16, 18, 20, 24];
 const SHIP_KN_START = 12;
-const FUEL_T_PER_DAY = 25;
 const MIN_DEPTH_M = 15;
 const ROUTE = "#ffd27a"; // plotted course: amber, so it stands apart from the cyan bearing and streaks
 
@@ -75,6 +79,24 @@ function decode(flat: number[]): Ring {
 const fmt = (v: number, pos: string, neg: string, pad: number) =>
   `${v >= 0 ? pos : neg} ${Math.abs(v).toFixed(3).padStart(pad, "0")}°`;
 
+// Initial great-circle bearing a -> b, degrees true.
+const gcBearing = ([lon1, lat1]: LonLat, [lon2, lat2]: LonLat) => {
+  const r = Math.PI / 180, dl = (lon2 - lon1) * r;
+  const e = Math.sin(dl) * Math.cos(lat2 * r);
+  const n = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos(dl);
+  return ((Math.atan2(e, n) / r) + 360) % 360;
+};
+const DEMO: [LonLat, LonLat] = [[-74.9, 35.2], [-63.5, 43.0]]; // Cape Hatteras to south of Nova Scotia, up the Gulf Stream
+const DEMO_HINT = "Fuel-optimal route through today's Gulf Stream. Tap ROUTE to plot your own.";
+const SEEN = "holomap.seen";
+const NO_PLAY: PlayState = { t: -1, playing: false, total: 0, wind: "", current: "" };
+// What the ship panel's ROUTE TO button hands the engine.
+type ShipLeg = { name: string; port: string; lon: number; lat: number; portLon: number; portLat: number; kn: number; cog: number | null; eta: number | null };
+type Api = {
+  setTool: (t: Tool) => void; clear: () => void; share: () => void; play: () => void; seek: (t: number) => void;
+  routeShip: (s: ShipLeg) => void; closeRoute: () => void;
+};
+
 export default function Holomap() {
   const [tilt, setTilt] = useState(true);
   const [layer, setLayer] = useState<Layer>("ocean");
@@ -82,7 +104,18 @@ export default function Holomap() {
   const [showShips, setShowShips] = useState(true);
   const setShipsRef = useRef<(on: boolean) => void>(() => {});
   const [ship, setShip] = useState<ShipInfo | null>(null);
-  const [shipOpen, setShipOpen] = useState(false);
+  const [panel, setPanel] = useState<"ship" | "route" | null>(null);
+  const shipOpen = panel === "ship";
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+  const [play, setPlay] = useState<PlayState>(NO_PLAY);
+  const [market, setMarket] = useState<Market>(DEFAULT_MARKET);
+  const [about, setAbout] = useState(false);
+  const [toolUi, setToolUi] = useState<Tool>("none");
+  const [hint, setHint] = useState("");
+  const [copied, setCopied] = useState(false);
+  const api = useRef<Api | null>(null);
+  const routePanelOpen = useRef(false); // the engine hides the map label while the panel shows the same numbers
+  useEffect(() => { routePanelOpen.current = panel === "route"; }, [panel]);
   const closeShipRef = useRef<() => void>(() => {});
   const shipRef = useRef<HTMLCanvasElement>(null);
   const toolRef = useRef<HTMLCanvasElement>(null);
@@ -120,13 +153,20 @@ export default function Holomap() {
     let selMmsi: number | null = null; // ship shown in the side panel
     let selTrack: [number, number][] = []; // its past reported positions, merc, oldest first
     const toolCanvas = toolRef.current!;
-    const tctx = toolCanvas.getContext("2d")!;
-    let bearingFrom: [number, number] | null = null; // merc point where E was pressed
+    const tctx = toolCanvas.getContext("2d", { willReadFrequently: true })!; // read back every frame to threshold
+    let bearingFrom: [number, number] | null = null; // merc point where E was pressed / the bearing drag began
+    let bearingTo: [number, number] | null = null; // pinned end of a finished bearing drag (touch has no hover)
+    let tool: Tool = "none";
     let toolDrawn = false, toolKey = "";
-    // Plotted route (hold E, click the destination). line = densified great-circle legs in merc, x unwrapped
-    // from the start so a date-line crossing stays one piece; joints = waypoints where the legs meet.
-    type Plot = { from: [number, number]; to: [number, number]; line: [number, number][]; joints: [number, number][]; text: string[] };
+    // Plotted route (ROUTE tool or hold E + click). line = densified great-circle legs in merc, x unwrapped
+    // from the start so a date-line crossing stays one piece; joints = waypoints where the legs meet;
+    // times = seconds after departure at each line point (for playback).
+    type Plot = {
+      from: [number, number]; to: [number, number]; line: [number, number][]; joints: [number, number][]; text: string[];
+      times: number[]; wind: WindSeries | null; current: Field | null; ship?: ShipLeg;
+    };
     let route: Plot | null = null, routeJob = 0, routeVer = 0;
+    let playT = -1, playing = false, playPush = 0; // voyage clock (s after departure), -1 = not started
 
     let W = 0, H = 0, dpr = 1, fw = 0, fh = 0;
     let img: ImageData | null = null;
@@ -137,6 +177,7 @@ export default function Holomap() {
     const mctx = maskCanvas.getContext("2d", { willReadFrequently: true })!;
     const [mx0, my0] = toMerc(START.lon, START.lat);
     const view = { cx: mx0, cy: my0, scale: 0 }; // merc centre + CSS px per merc unit
+    let startKm = START.widthKm; // width of the first view (a shared link can set it)
     let land: Ring[] = [], lakes: Ring[] = [];
     let depth: [number, Ring[]][] = [];
     let depthFill = new Map<number, Ring[]>(); // area deeper than each contour, for terrace shading
@@ -249,6 +290,24 @@ export default function Holomap() {
       fetchTimer = window.setTimeout(refresh, 350);
       clearTimeout(shipTimer);
       shipTimer = window.setTimeout(pollShips, 400);
+      saveHash();
+    };
+    // The address bar always holds the view, layer, speed and route, so copying it is sharing:
+    // #v=lon,lat,widthKm&l=wind&kn=10&r=lon1,lat1,lon2,lat2
+    let hashTimer = 0;
+    const hashNow = () => {
+      if (!W) return location.hash;
+      const [lon, lat] = fromMerc(view.cx, view.cy);
+      const km = (W / view.scale) * EARTH_KM * Math.cos((lat * Math.PI) / 180);
+      const q = [`v=${lon.toFixed(2)},${lat.toFixed(2)},${Math.round(km)}`];
+      if (mode !== "ocean") q.push(`l=${mode}`);
+      if (knots !== SHIP_KN_START) q.push(`kn=${knots}`);
+      if (route) q.push(`r=${[...fromMerc(...route.from), ...fromMerc(...route.to)].map((v) => v.toFixed(3)).join(",")}`);
+      return `#${q.join("&")}`;
+    };
+    const saveHash = () => {
+      clearTimeout(hashTimer);
+      hashTimer = window.setTimeout(() => history.replaceState(null, "", hashNow()), 400);
     };
     const panBy = (dx: number, dy: number) => {
       const oy = view.cy;
@@ -340,7 +399,7 @@ export default function Holomap() {
       selMmsi = sh?.mmsi ?? null;
       selTrack = [];
       shipsDirty = true;
-      setShipOpen(!!sh);
+      setPanel((p) => (sh ? "ship" : p === "ship" ? null : p));
       if (!sh) return;
       const [lon, lat] = fromMerc(sh.x, sh.y);
       setShip({ mmsi: sh.mmsi, name: sh.name, type: sh.type, lat, lon, sog: sh.sog, cog: sh.cog }); // instant, then fill in
@@ -544,7 +603,8 @@ export default function Holomap() {
     // Land raster for the planner: the same land/lake polygons as the map, filled onto a small canvas
     // covering the route's box (copies shifted a world east/west so date-line boxes work). Cells more
     // than half land are 2 (blocked), cells touching land are 1; then seabed shallower than MIN_DEPTH_M
-    // (from the same AWS terrain tiles as the relief, which carry sea depth too) is blocked as well.
+    // (from the same AWS terrain tiles as the relief, which carry sea depth too) is 3: blocked as well,
+    // but a port behind shallows can still be reached across them.
     const routeLand: LandMask = async (x0, y0, step, cols, rows) => {
       const cv = document.createElement("canvas");
       cv.width = cols;
@@ -578,7 +638,7 @@ export default function Holomap() {
           const e = elev.get(`${Math.floor(fx)},${Math.floor(fy)}`);
           if (!e) continue; // tile failed: trust the coastline alone
           const h = e[Math.floor((fy % 1) * 256) * 256 + Math.floor((fx - Math.floor(fx)) * 256)];
-          if (h > -MIN_DEPTH_M && h < 5) m[ci] = 2; // shallow sea; above +5 m is a lake surface or a coastline mismatch
+          if (h > -MIN_DEPTH_M && h < 5) m[ci] = 3; // shallow sea; above +5 m is a lake surface or a coastline mismatch
         }
       return m;
     };
@@ -606,11 +666,23 @@ export default function Holomap() {
       }
       return elevTiles.get(key)!;
     };
-    const setRoute = (r: Plot | null) => { route = r; routeVer++; };
+    const setRoute = (r: Plot | null) => {
+      route = r;
+      routeVer++;
+      playT = -1;
+      playing = false;
+      pushPlay(true);
+      saveHash();
+    };
     let knots = SHIP_KN_START;
-    const plotRoute = async (from: [number, number], to: [number, number]) => {
+    const blankInfo = (status: RouteInfo["status"], kn: number): RouteInfo =>
+      ({ status, knots: kn, nm: 0, hours: 0, delayHours: 0, legs: 0, depart: Date.now(), via: [], directHours: null, note: "", bySpeed: [] });
+    const plotRoute = async (from: [number, number], to: [number, number], ship?: ShipLeg) => {
       const job = ++routeJob, kn = knots;
-      setRoute({ from, to, line: [], joints: [], text: ["PLOTTING ROUTE…"] });
+      const empty = (text: string): Plot => ({ from, to, line: [], joints: [], text: [text], times: [], wind: null, current: null, ship });
+      setRoute(empty("PLOTTING ROUTE…"));
+      setRouteInfo(blankInfo("plotting", kn));
+      if (window.innerWidth > 700) setPanel("route");
       // Both layers feed the planner whichever one is on screen; a missing one just counts as calm.
       const sig = new AbortController().signal;
       const [current, now] = await Promise.all([loadGrid("ocean", sig).catch(() => null), loadGrid("wind", sig).catch(() => null)]);
@@ -618,55 +690,110 @@ export default function Holomap() {
       if (job !== routeJob) return;
       const a = fromMerc(...from), b = fromMerc(...to);
       // Pass 1 with today's wind gives the ETA, which says how many days of forecast to fetch for pass 2.
-      const first = await planRoute(a, b, { current, wind: now && { start: 0, step: 3600, fields: [now] }, knots: kn }, routeLand);
+      const env0: Env = { current, wind: now && { start: 0, step: 3600, fields: [now] }, knots: kn };
+      const first = await planRoute(a, b, env0, routeLand);
       if (job !== routeJob) return;
-      if (!first) return setRoute({ from, to, line: [], joints: [], text: ["NO SEA ROUTE"] });
-      show(from, to, first, kn, "REFINING WITH WIND FORECAST…");
+      if (!first) {
+        setRoute(empty("NO SEA ROUTE"));
+        setRouteInfo(blankInfo("none", kn));
+        return;
+      }
+      show(from, to, first, env0, "refining", "REFINING WITH WIND FORECAST…", ship);
       const lons = first.pts.map((p) => p[0]), lats = first.pts.map((p) => p[1]);
       let [w, e] = [Math.min(...lons) - 10, Math.max(...lons) + 10];
       if (e - w > 180) [w, e] = [-180, 180]; // probably across the date line: take the full width
       const box = [Math.max(-180, w), Math.max(-89, Math.min(...lats) - 10), Math.min(180, e), Math.min(89, Math.max(...lats) + 10)];
       const wind = await loadWindForecast(first.hours * 1.3 + 12, box).catch(() => null);
       if (job !== routeJob) return;
-      if (!wind) return show(from, to, first, kn, "WIND: NOW ONLY (NO FORECAST)");
-      const r = await planRoute(a, b, { current, wind, knots: kn }, routeLand);
+      if (!wind) return show(from, to, first, env0, "done", "WIND: NOW ONLY (NO FORECAST)", ship);
+      const env1: Env = { current, wind, knots: kn };
+      const r = await planRoute(a, b, env1, routeLand);
       if (job !== routeJob) return;
-      show(from, to, r ?? first, kn, r ? "FORECAST WIND · TODAY'S CURRENTS" : "WIND: NOW ONLY (NO FORECAST)");
+      show(from, to, r ?? first, r ? env1 : env0, "done", r ? "FORECAST WIND · TODAY'S CURRENTS" : "WIND: NOW ONLY (NO FORECAST)", ship);
     };
-    const show = (from: [number, number], to: [number, number], r: Route, kn: number, note: string) => {
-      const line: [number, number][] = [], joints: [number, number][] = [];
-      let ux = from[0];
+    const show = (from: [number, number], to: [number, number], r: Route, env: Env, status: "refining" | "done", note: string, ship?: ShipLeg) => {
+      const line: [number, number][] = [], joints: [number, number][] = [], times: number[] = [];
+      let ux = from[0], t = 0, prev = r.pts[0];
       for (let k = 1; k < r.pts.length; k++) {
         const n = Math.min(200, Math.max(1, Math.ceil(gcMetres(r.pts[k - 1], r.pts[k]) / 25e3)));
         for (let q = k === 1 ? 0 : 1; q <= n; q++) {
-          const [x, y] = toMerc(...gcAt(r.pts[k - 1], r.pts[k], q / n));
+          const p = gcAt(r.pts[k - 1], r.pts[k], q / n);
+          if (line.length) t += legSeconds(env, prev, p, 20e3, t);
+          prev = p;
+          const [x, y] = toMerc(...p);
           ux += near(x - ux);
           line.push([ux, y]);
+          times.push(t);
         }
         if (k < r.pts.length - 1) joints.push(line[line.length - 1]);
       }
+      // the planner timed the legs at its own sample spacing; scale so playback ends at its ETA exactly
+      const f = t > 0 && Number.isFinite(t) ? (r.hours * 3600) / t : 1;
+      for (let i = 0; i < times.length; i++) times[i] *= f;
+      // The same path timed at every speed option, for the cost chart (the path itself is for this speed).
+      const kn = env.knots;
+      const bySpeed = [...new Set([...SPEEDS, kn])].sort((p, q) => p - q).map((s) => {
+        if (s === kn) return { kn: s, hours: r.hours };
+        const e = { ...env, knots: s };
+        let sec = 0;
+        for (let k = 1; k < r.pts.length; k++) sec += legSeconds(e, r.pts[k - 1], r.pts[k], 20e3, sec);
+        return { kn: s, hours: sec / 3600 };
+      });
       const nm = r.km / 1.852, h = r.hours + r.delayHours;
       const dur = h < 48 ? `${h < 10 ? h.toFixed(1) : Math.round(h)} H` : `${Math.floor(h / 24)} D ${Math.round(h % 24)} H`;
-      const eta = new Date(Date.now() + h * 3600_000);
-      const etaTxt = `${eta.getUTCDate().toString().padStart(2, "0")} ${eta.toLocaleString("en-US", { month: "short", timeZone: "UTC" }).toUpperCase()} ${eta.getUTCHours().toString().padStart(2, "0")}:00Z`;
-      // Constant power: burn per day follows the cube of speed; lock/queue time is counted as idle.
-      const tonnes = (FUEL_T_PER_DAY * (kn / 12) ** 3 * r.hours) / 24;
-      const pct = r.directHours ? (1 - r.hours / r.directHours) * 100 : 0;
       setRoute({
-        from, to, line, joints,
-        text: [
-          `FUEL-OPTIMAL ROUTE · ${kn} KN`,
-          `${nm < 10 ? nm.toFixed(1) : Math.round(nm).toLocaleString("en-US")} NM · ${dur} · ${r.pts.length - 1} LEG${r.pts.length > 2 ? "S" : ""}`,
-          `ETA ${etaTxt} · ≈${tonnes < 10 ? tonnes.toFixed(1) : Math.round(tonnes).toLocaleString("en-US")} T FUEL`,
-          ...r.via.map((v) => `VIA ${v}`),
-          r.directHours == null ? "DIRECT LINE CROSSES LAND" : pct < 0.5 ? "DIRECT IS BEST" : `FUEL −${pct.toFixed(pct < 10 ? 1 : 0)}% VS DIRECT`,
-          note,
-        ],
+        from, to, line, joints, times, wind: env.wind, current: env.current, ship,
+        text: [`FUEL-OPTIMAL · ${kn} KN`, `${nm < 10 ? nm.toFixed(1) : Math.round(nm).toLocaleString("en-US")} NM · ${dur}`],
+      });
+      const hd = ship?.cog == null || r.pts.length < 2 ? null : Math.abs(((ship.cog - gcBearing(r.pts[0], r.pts[1]) + 540) % 360) - 180);
+      setRouteInfo({
+        status, knots: kn, nm, hours: r.hours, delayHours: r.delayHours, legs: r.pts.length - 1, depart: Date.now(),
+        via: r.via, directHours: r.directHours, note, bySpeed,
+        ship: ship && { name: ship.name, port: ship.port, headingDiff: hd, reportedEta: ship.eta },
       });
     };
     setKnotsRef.current = (k) => {
       knots = k;
-      if (route) plotRoute(route.from, route.to); // re-plot the route on the table at the new speed
+      // re-plot the route on the table at the new speed (a ship's route is only "its own" at its own speed)
+      if (route) plotRoute(route.from, route.to, route.ship?.kn === k ? route.ship : undefined);
+      saveHash();
+    };
+
+    // ---------- voyage playback ----------
+    // Where the ship is t seconds into the voyage: merc point on the drawn line + screen heading (radians,
+    // 0 = up, clockwise).
+    const routePos = (t: number): [number, number, number] => {
+      const L = route!.line, T = route!.times;
+      let lo = 0, hi = T.length - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T[m] <= t) lo = m; else hi = m; }
+      const f = T[hi] > T[lo] ? Math.min(1, Math.max(0, (t - T[lo]) / (T[hi] - T[lo]))) : 0;
+      const [x0, y0] = L[lo], [x1, y1] = L[hi];
+      return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f, Math.atan2(x1 - x0, -(y1 - y0))];
+    };
+    const playTotal = () => (route && route.times.length > 1 ? route.times[route.times.length - 1] : 0);
+    // The panel's clock and the weather at the ship, pushed to React at ~8 Hz.
+    const pushPlay = (force = false) => {
+      const tNow = performance.now();
+      if (!force && tNow - playPush < 125) return;
+      playPush = tNow;
+      const total = playTotal();
+      if (!route || playT < 0 || !total) return setPlay({ ...NO_PLAY, total });
+      const [x, y] = routePos(playT), [lon, lat] = fromMerc(x - Math.floor(x), y);
+      const w = windAt(route.wind, lon, lat, playT), c = route.current && sample(route.current, lon, lat);
+      const deg = (u: number, v: number, from = 0) => `${Math.round(((Math.atan2(u, v) * 180) / Math.PI + 360 + from) % 360).toString().padStart(3, "0")}°`;
+      setPlay({
+        t: playT, playing, total,
+        wind: w ? `WIND ${(Math.hypot(w[0], w[1]) * MS_TO_KN).toFixed(0)} KN FROM ${deg(w[0], w[1], 180)}` : "WIND --",
+        current: c ? `CURRENT ${(Math.hypot(c[0], c[1]) * MS_TO_KN).toFixed(1)} KN ${deg(c[0], c[1])}` : "CURRENT --",
+      });
+    };
+    const stepPlay = (dt: number) => {
+      const total = playTotal();
+      if (!playing || !total) return;
+      // about one voyage-day per 2 s, kept between 8 and 25 s for the whole trip
+      playT += (dt * total) / Math.min(25, Math.max(8, (total / 86400) * 2));
+      if (playT >= total) { playT = total; playing = false; }
+      pushPlay(!playing);
     };
     const drawRoute = () => {
       if (!route) return;
@@ -692,7 +819,21 @@ export default function Holomap() {
       tctx.moveTo(ex, ey - 9); tctx.lineTo(ex + 9, ey); tctx.lineTo(ex, ey + 9); tctx.lineTo(ex - 9, ey); tctx.closePath();
       tctx.stroke();
       tctx.fillRect(ex - 1.5, ey - 1.5, 3, 3);
+      if (playT >= 0 && route.times.length > 1) { // the ship sailing it: solid amber arrow along the course
+        const [x, y, ang] = routePos(playT), [qx, qy] = at(x, y);
+        tctx.save();
+        tctx.translate(qx, qy);
+        tctx.rotate(ang);
+        tctx.beginPath();
+        tctx.moveTo(0, -13); tctx.lineTo(9, 10); tctx.lineTo(0, 4); tctx.lineTo(-9, 10); tctx.closePath();
+        tctx.fill();
+        tctx.restore();
+        tctx.beginPath();
+        tctx.arc(qx, qy, 18, 0, 2 * Math.PI);
+        tctx.stroke();
+      }
       const label = routeLabelRef.current!;
+      if (routePanelOpen.current) return; // drawBearing hid it already
       label.style.display = "block";
       if (label.dataset.v !== String(routeVer)) {
         label.dataset.v = String(routeVer);
@@ -715,7 +856,7 @@ export default function Holomap() {
     // Drawn on the same low-res grid as the current streaks (1 px = PIX CSS px), then hard-thresholded
     // so every pixel is fully on/off and the CSS upscale stays chunky. Glow comes from a CSS drop-shadow.
     const drawBearing = () => {
-      const key = `${view.cx},${view.cy},${view.scale},${W},${H},${cursor.x},${cursor.y},${bearingFrom},${routeVer}`;
+      const key = `${view.cx},${view.cy},${view.scale},${W},${H},${cursor.x},${cursor.y},${bearingFrom},${bearingTo},${routeVer},${playT.toFixed(0)},${routePanelOpen.current}`;
       if (key === toolKey) return; // the route stays up, so skip the readback while nothing moves
       toolKey = key;
       tctx.setTransform(1 / PIX, 0, 0, 1 / PIX, 0, 0); // draw in CSS px, land on the low-res grid
@@ -742,8 +883,8 @@ export default function Holomap() {
       if (!bearingFrom) return;
       tctx.strokeRect(ax - 6, ay - 6, 12, 12); // anchor mark: pixel square with a centre dot
       tctx.fillRect(ax - 1.5, ay - 1.5, 3, 3);
-      if (cursor.x < 0) return;
-      const bx = cursor.x, by = cursor.y;
+      if (!bearingTo && cursor.x < 0) return;
+      const [bx, by] = bearingTo ? toScreen(...bearingTo) : [cursor.x, cursor.y];
       const len = Math.hypot(bx - ax, by - ay);
       if (len < 6) return;
 
@@ -1089,11 +1230,15 @@ export default function Holomap() {
       const M = MODES[mode];
       const mask = M.skipLand && landMask.length === fw * fh ? landMask : null;
       const keep = Math.pow(TRAIL, dt);
+      // During voyage playback the wind streaks show the forecast for that moment inside the route's forecast
+      // box (live wind outside it), so you watch the weather move past the ship.
+      const fc = mode === "wind" && playT >= 0 && route?.wind && route.wind.fields.length > 1 ? route.wind : null;
       for (let i = 3; i < d.length; i += 4) if (d[i]) d[i] = (d[i] * keep) | 0; // floor so it reaches 0
       for (let i = 0; i < px.length; i++) {
         const x = px[i], y = py[i];
         const inView = x >= 0 && y >= 0 && x < fw && y < fh;
-        const s = field && inView && !mask?.[(y | 0) * fw + (x | 0)] ? sample(field, lonLeft + x * dLon, rowLat[y | 0]) : null;
+        const lon = lonLeft + x * dLon, lat = rowLat[y | 0];
+        const s = field && inView && !mask?.[(y | 0) * fw + (x | 0)] ? (fc && windAt(fc, lon, lat, playT)) || sample(field, lon, lat) : null;
         age[i] += dt;
         if (age[i] > life[i]) { spawn(i); continue; }
         // On land / no data: sit out the rest of this life invisibly. Re-rolling at once would
@@ -1159,6 +1304,7 @@ export default function Holomap() {
         dirty = true;
       }
       if (dirty && W) { drawBase(); dirty = false; }
+      stepPlay(dt);
       if (!paused) stepFlow(dt);
       if (shipsDirty && W) { drawShips(); shipsDirty = false; }
       if (W && (bearingFrom || route || toolDrawn)) drawBearing();
@@ -1194,13 +1340,98 @@ export default function Holomap() {
       img = fctx.createImageData(fw, fh);
       const n = Math.floor((fw * fh) / 40);
       px = new Float32Array(n); py = new Float32Array(n); age = new Float32Array(n); life = new Float32Array(n);
-      if (!view.scale) view.scale = W / (START.widthKm / (EARTH_KM * Math.cos((START.lat * Math.PI) / 180)));
+      if (!view.scale) view.scale = W / (startKm / (EARTH_KM * Math.cos((fromMerc(0, view.cy)[1] * Math.PI) / 180)));
       clampView();
       respawnAll();
       viewChanged();
     };
     const ro = new ResizeObserver(resize);
     ro.observe(surface);
+
+    // ---------- tools, sharing, playback controls (the toolbar and panels call these) ----------
+    let demoHint = false;
+    const dismissHint = () => { if (demoHint) { demoHint = false; setHint(""); } };
+    const setTool = (t: Tool) => {
+      tool = t;
+      bearingFrom = bearingTo = null;
+      setToolUi(t);
+      demoHint = false;
+      setHint(t === "route" ? "TAP START" : t === "bearing" ? "DRAG TO MEASURE" : "");
+    };
+    const clearAll = () => {
+      setTool("none");
+      routeJob++; // drop a route still being plotted
+      setRoute(null);
+      setRouteInfo(null);
+      setPanel((p) => (p === "route" ? null : p));
+    };
+    let copiedTimer = 0;
+    api.current = {
+      setTool,
+      clear: clearAll,
+      share: async () => {
+        const h = hashNow();
+        history.replaceState(null, "", h);
+        try {
+          await navigator.clipboard.writeText(location.href);
+          setCopied(true);
+          clearTimeout(copiedTimer);
+          copiedTimer = window.setTimeout(() => setCopied(false), 1800);
+        } catch {
+          setHint("COPY THE ADDRESS BAR TO SHARE THIS VIEW"); // clipboard blocked (e.g. not https)
+        }
+      },
+      play: () => {
+        const total = playTotal();
+        if (!total) return;
+        if (playT < 0 || playT >= total) playT = 0;
+        playing = !playing;
+        pushPlay(true);
+      },
+      seek: (t) => {
+        if (!playTotal()) return;
+        playing = false;
+        playT = t;
+        pushPlay(true);
+      },
+      routeShip: (s) => {
+        knots = s.kn;
+        setSpeed(s.kn);
+        plotRoute(toMerc(s.lon, s.lat), toMerc(s.portLon, s.portLat), s);
+      },
+      closeRoute: () => setPanel((p) => (p === "route" ? null : p)),
+    };
+
+    // Shared link or first visit: #v=lon,lat,km&l=wind&kn=10&r=lon1,lat1,lon2,lat2 (see hashNow).
+    const hp = new URLSearchParams(location.hash.slice(1));
+    const nums = (k: string, n: number) => {
+      const v = hp.get(k)?.split(",").map(Number);
+      return v?.length === n && v.every(Number.isFinite) ? v : null;
+    };
+    const hv = nums("v", 3);
+    if (hv) {
+      [view.cx, view.cy] = toMerc(hv[0], hv[1]);
+      startKm = Math.max(5, hv[2]);
+    }
+    if (hp.get("l") === "wind") {
+      mode = "wind";
+      setLayer("wind");
+    }
+    const hk = Number(hp.get("kn"));
+    if (hk >= 1 && hk <= 40) {
+      knots = hk;
+      setSpeed(hk);
+    }
+    const hr = nums("r", 4);
+    let seen = true;
+    try { seen = !!localStorage.getItem(SEEN); localStorage.setItem(SEEN, "1"); } catch { /* storage blocked: no demo */ }
+    const pending: [LonLat, LonLat] | null = hr ? [[hr[0], hr[1]], [hr[2], hr[3]]] : !seen && !location.hash ? DEMO : null;
+    if (pending === DEMO) { // frame the whole demo route, left of the route panel on wide screens
+      const wide = window.innerWidth > 700;
+      [view.cx, view.cy] = toMerc(wide ? -65 : -69.2, wide ? 39.3 : 39.1);
+      startKm = wide ? 3000 : 1500;
+    }
+    if (window.innerWidth < 700) setTilt(false); // tilted wastes a phone screen
 
     fetch("/geo.json")
       .then((r) => r.json() as Promise<Geo>)
@@ -1213,49 +1444,115 @@ export default function Holomap() {
           .sort((a, b) => b[0] - a[0]);
         depthFill = new Map(Object.entries(g.fill).map(([d, rings]) => [Number(d), rings.map(decode)]));
         dirty = true;
+        if (!pending) return; // the planner needs the land loaded
+        plotRoute(toMerc(...pending[0]), toMerc(...pending[1]));
+        if (pending === DEMO) {
+          demoHint = true;
+          setHint(DEMO_HINT);
+        }
       })
       .catch((e) => console.error("geo load failed", e));
 
     // offsetX/Y are in the surface's own (untransformed) coordinates, so this stays correct when tilted.
+    // Two pointers pinch-zoom and pan together; one pointer drags (or measures, with the BEARING tool).
+    const pointers = new Map<number, [number, number]>();
+    let pinch: { d: number; mx: number; my: number } | null = null;
+    let lastTap = { t: 0, x: 0, y: 0 };
+    const pinchNow = () => {
+      const [a, b] = [...pointers.values()];
+      return { d: Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1])), mx: (a[0] + b[0]) / 2, my: (a[1] + b[1]) / 2 };
+    };
     const onDown = (e: PointerEvent) => {
       // Buttons/links on the table (layer picker, attribution) must get their click. React's
       // stopPropagation runs too late to stop this native listener, and capturing the pointer on
       // a button swallows its click in WebKit, so bail out here.
+      dismissHint(); // any touch counts as the first interaction, UI included
       if ((e.target as Element).closest("button, a, [data-ui]")) return;
-      cursor.down = true;
-      cursor.lx = cursor.dx = e.offsetX;
-      cursor.ly = cursor.dy = e.offsetY;
+      pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
       try {
         surface.setPointerCapture(e.pointerId);
       } catch {
         // synthetic events have no live pointer to capture; dragging still works without it
       }
+      if (pointers.size === 2) { // second finger: a pinch, not a click or a drag
+        pinch = pinchNow();
+        cursor.down = false;
+        if (tool === "bearing" && !bearingTo) bearingFrom = null;
+        return;
+      }
+      if (pointers.size > 2) return;
+      cursor.down = true;
+      cursor.lx = cursor.dx = cursor.x = e.offsetX;
+      cursor.ly = cursor.dy = cursor.y = e.offsetY;
+      if (tool === "bearing") {
+        bearingFrom = toMercAt(e.offsetX, e.offsetY);
+        bearingTo = null;
+      }
     };
     const onMove = (e: PointerEvent) => {
       // over the ship panel offsetX/Y are panel-relative, not map coordinates
-      if (!cursor.down && (e.target as Element).closest("[data-ui]")) { cursor.x = -1; return; }
+      if (!cursor.down && !pinch && (e.target as Element).closest("[data-ui]")) { cursor.x = -1; return; }
+      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
+      if (pinch) {
+        if (pointers.size !== 2) return;
+        const p = pinchNow();
+        panBy(p.mx - pinch.mx, p.my - pinch.my);
+        zoomAt(p.mx, p.my, p.d / pinch.d);
+        pinch = p;
+        return;
+      }
       cursor.x = e.offsetX;
       cursor.y = e.offsetY;
-      if (!cursor.down) return;
+      if (!cursor.down || (tool === "bearing" && bearingFrom)) return; // BEARING: dragging measures instead of panning
       panBy(e.offsetX - cursor.lx, e.offsetY - cursor.ly);
       cursor.lx = e.offsetX;
       cursor.ly = e.offsetY;
     };
+    const click = (x: number, y: number) => {
+      if (tool === "route") { // tap the start, then the destination
+        if (!bearingFrom) {
+          bearingFrom = toMercAt(x, y);
+          setHint("TAP DESTINATION");
+        } else {
+          plotRoute(bearingFrom, toMercAt(x, y));
+          setTool("none");
+        }
+        return;
+      }
+      if (tool === "bearing") { bearingFrom = bearingTo = null; return; } // a tap clears the measurement
+      if (bearingFrom) return plotRoute(bearingFrom, toMercAt(x, y)); // E held: click = destination
+      const m = markAt(x, y);
+      if (m && m.ships.length > 1) {
+        // centre on it and zoom until its ships spread past a cell (clampView stops at max zoom,
+        // where whatever still overlaps fans out)
+        const pts = m.ships.map((sh) => toScreen(sh.x, sh.y));
+        const spread = Math.max(
+          Math.max(...pts.map((q) => q[0])) - Math.min(...pts.map((q) => q[0])),
+          Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])),
+        );
+        panBy(W / 2 - m.x, H / 2 - m.y);
+        zoomAt(W / 2, H / 2, Math.min(64, Math.max(2, (2.5 * CELL) / Math.max(spread, 1))));
+        return;
+      }
+      const now = performance.now();
+      if (!m && now - lastTap.t < 350 && Math.hypot(x - lastTap.x, y - lastTap.y) < 30) { // double-tap: zoom in
+        lastTap.t = 0;
+        zoomAt(x, y, 2);
+        return;
+      }
+      lastTap = { t: now, x, y };
+      selectShip(m?.ships[0] ?? null); // click a ship to open its panel, empty map to close it
+    };
     const onUp = (e: PointerEvent) => {
-      if (cursor.down && Math.hypot(e.offsetX - cursor.dx, e.offsetY - cursor.dy) < 4) { // a click, not a drag
-        const m = markAt(e.offsetX, e.offsetY);
-        if (bearingFrom) plotRoute(bearingFrom, toMercAt(e.offsetX, e.offsetY)); // E held: click = destination
-        else if (m && m.ships.length > 1) {
-          // centre on it and zoom until its ships spread past a cell (clampView stops at max zoom,
-          // where whatever still overlaps fans out)
-          const pts = m.ships.map((sh) => toScreen(sh.x, sh.y));
-          const spread = Math.max(
-            Math.max(...pts.map((q) => q[0])) - Math.min(...pts.map((q) => q[0])),
-            Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])),
-          );
-          panBy(W / 2 - m.x, H / 2 - m.y);
-          zoomAt(W / 2, H / 2, Math.min(64, Math.max(2, (2.5 * CELL) / Math.max(spread, 1))));
-        } else selectShip(m?.ships[0] ?? null); // click a ship to open its panel, empty map to close it
+      pointers.delete(e.pointerId);
+      if (pinch) { // the finger left behind after a pinch neither clicks nor drags
+        if (pointers.size < 2) pinch = null;
+        cursor.down = false;
+        return;
+      }
+      if (cursor.down) {
+        if (Math.hypot(e.offsetX - cursor.dx, e.offsetY - cursor.dy) < 4) click(e.offsetX, e.offsetY); // a click, not a drag
+        else if (tool === "bearing" && bearingFrom) bearingTo = toMercAt(e.offsetX, e.offsetY); // pin the measurement
       }
       cursor.down = false;
     };
@@ -1263,28 +1560,42 @@ export default function Holomap() {
     const onWheel = (e: WheelEvent) => {
       if ((e.target as Element).closest("[data-ui]")) return; // let the ship panel scroll
       e.preventDefault();
+      dismissHint();
       zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.2 : 0.006))); // ~1.8x per wheel notch (line-mode wheels send ~3/notch)
     };
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       if (e.type === "keyup") {
         keys.delete(key);
-        if (key === "e") bearingFrom = null;
+        if (key === "e" && tool === "none") bearingFrom = null;
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (key === "escape") {
-        selectShip(null);
-        routeJob++; // drop a route still being plotted
-        setRoute(null);
+      if ((e.target as Element | null)?.closest?.("input, textarea, select")) return; // typing in the route panel
+      dismissHint();
+      if (key === "escape") { // step back: a tool first, then everything on the table
+        if (tool !== "none" || bearingTo) setTool("none");
+        else {
+          selectShip(null);
+          clearAll();
+        }
       }
-      if (key === "e" && !e.repeat) {
+      if (key === "e" && !e.repeat && tool === "none") {
         // anchor where the cursor is (map centre if it's off the table); stays put while panning
         const sx = cursor.x >= 0 ? cursor.x : W / 2, sy = cursor.x >= 0 ? cursor.y : H / 2;
         bearingFrom = toMercAt(sx, sy);
+        bearingTo = null;
       }
-      if (key === "t" && !e.repeat) setTilt((v) => !v);
-      if (key === "p" && !e.repeat) {
+      if (e.repeat) return;
+      if (key === "r") setTool(tool === "route" ? "none" : "route");
+      if (key === "b") setTool(tool === "bearing" ? "none" : "bearing");
+      if (key === "?") setAbout(true);
+      if (key === " ") {
+        e.preventDefault(); // don't scroll or press a focused button
+        api.current!.play();
+      }
+      if (key === "t") setTilt((v) => !v);
+      if (key === "p") {
         paused = !paused;
         hud.paused.current!.style.display = paused ? "block" : "none";
       }
@@ -1295,7 +1606,7 @@ export default function Holomap() {
     };
     const onBlur = () => {
       keys.clear();
-      bearingFrom = null; // keyup never arrives if focus leaves while E is held
+      if (tool === "none") bearingFrom = null; // keyup never arrives if focus leaves while E is held
     };
     setShipsRef.current = (on) => {
       shipsOn = on;
@@ -1310,6 +1621,7 @@ export default function Holomap() {
       field = null;
       respawnAll();
       refresh();
+      saveHash();
     };
 
     surface.addEventListener("pointerdown", onDown);
@@ -1330,6 +1642,8 @@ export default function Holomap() {
       clearInterval(every15);
       clearInterval(every3);
       clearTimeout(shipTimer);
+      clearTimeout(hashTimer);
+      clearTimeout(copiedTimer);
       ctrl?.abort();
       ro.disconnect();
       surface.removeEventListener("pointerdown", onDown);
@@ -1350,6 +1664,7 @@ export default function Holomap() {
   const shipColor = ship ? shipKind(ship.type).color : OTHER_SHIP.color;
   // Class B (small craft) transponders have no status, destination, ETA, draught or IMO: drop those rows.
   const classB = ship?.cls === "B";
+  const port = matchDestination(ship?.dest);
   const noB = new Set(classB ? ["STATUS", "DESTINATION", "ETA", "DRAUGHT", "IMO"] : []);
   const shipRows: [string, [string, string | undefined][]][] = ship
     ? [
@@ -1409,17 +1724,22 @@ export default function Holomap() {
             </div>
             <div
               ref={routeLabelRef}
-              className="pointer-events-none absolute hidden whitespace-pre border border-[#ffd27a]/40 bg-[#1a1204]/80 px-2 py-0.5 text-xl leading-5 text-[#ffd27a] [text-shadow:0_0_6px_rgba(255,200,110,0.7)]"
+              data-ui
+              role="button"
+              tabIndex={-1}
+              title="Route details"
+              onClick={() => setPanel("route")}
+              className="absolute hidden cursor-pointer whitespace-pre border border-[#ffd27a]/40 bg-[#1a1204]/80 px-2 py-0.5 text-xl leading-5 text-[#ffd27a] [text-shadow:0_0_6px_rgba(255,200,110,0.7)] hover:bg-[#2a1d06]/90"
             />
             <div
               ref={shipTipRef}
               className="pointer-events-none absolute hidden whitespace-pre border border-current/40 bg-black/60 px-2 py-0.5 text-lg leading-5 [text-shadow:0_0_6px_currentColor]"
             />
 
-            <div className={`pointer-events-none absolute inset-x-4 top-3 flex items-center gap-3 border-b border-[#7ff0ff]/25 bg-black/30 px-3 py-0.5 text-xl italic ${glow}`}>
+            <div className={`pointer-events-none absolute inset-x-4 top-3 flex items-center gap-3 border-b border-[#7ff0ff]/25 bg-black/30 px-3 py-0.5 text-xl italic max-[700px]:inset-x-2 max-[700px]:px-1.5 max-[700px]:text-base ${glow}`}>
               <span ref={hud.current}>OCEAN CURRENT: --</span>
               <span ref={hud.arrow} className="inline-block opacity-0">↑</span>
-              <span className="ml-auto flex items-center gap-4 text-base not-italic opacity-70">
+              <span className="ml-auto flex items-center gap-4 text-base not-italic opacity-70 max-[700px]:hidden">
                 <span ref={shipStatusRef}>SHIPS…</span>
                 <span ref={hud.status}>SYNCING…</span>
                 <a
@@ -1434,7 +1754,7 @@ export default function Holomap() {
             </div>
 
             {/* Layer picker: holo radio squares. onDown skips buttons, so clicks never start a map drag. */}
-            <div role="radiogroup" aria-label="Map layer" className="absolute left-5 top-14 flex flex-col gap-2">
+            <div role="radiogroup" aria-label="Map layer" className="absolute left-5 top-14 flex flex-col gap-2 max-[700px]:left-2.5 max-[700px]:top-16 max-[700px]:origin-top-left max-[700px]:scale-[0.8]">
               {(["ocean", "wind"] as const).map((m) => {
                 const on = layer === m;
                 return (
@@ -1479,7 +1799,8 @@ export default function Holomap() {
               <div className={`mt-2 flex items-center gap-1.5 text-xl italic ${glow}`}>
                 <span className="opacity-80">SPEED</span>
                 {([-1, 1] as const).map((dir) => {
-                  const next = SPEEDS[SPEEDS.indexOf(speed) + dir];
+                  // a ship's route can run at its own speed, between the options
+                  const next = dir < 0 ? SPEEDS.findLast((s) => s < speed) : SPEEDS.find((s) => s > speed);
                   return (
                     <button
                       key={dir}
@@ -1487,6 +1808,7 @@ export default function Holomap() {
                       aria-label={dir < 0 ? "Slower" : "Faster"}
                       disabled={next == null}
                       onClick={() => {
+                        if (next == null) return;
                         setSpeed(next);
                         setKnotsRef.current(next);
                       }}
@@ -1504,7 +1826,7 @@ export default function Holomap() {
               ‖ PAUSED
             </div>
 
-            <div className={`pointer-events-none absolute left-5 -skew-x-12 text-4xl leading-none text-[#8fe9ff]/35 transition-[bottom] duration-[900ms] ease-[cubic-bezier(0.65,0,0.35,1)] ${tilt ? "bottom-3" : "bottom-32"}`}>
+            <div className={`pointer-events-none absolute left-5 -skew-x-12 text-4xl leading-none text-[#8fe9ff]/35 transition-[bottom] duration-[900ms] ease-[cubic-bezier(0.65,0,0.35,1)] max-[700px]:hidden ${tilt ? "bottom-3" : "bottom-32"}`}>
               <div ref={hud.lat}>N 00.000°</div>
               <div ref={hud.lon}>W 000.000°</div>
             </div>
@@ -1515,7 +1837,7 @@ export default function Holomap() {
               aria-label="Ship details"
               aria-hidden={!shipOpen}
               inert={!shipOpen}
-              className={`absolute bottom-20 right-4 top-12 w-[300px] overflow-y-auto border border-t-[3px] border-[#9ff0ff]/35 bg-[#041019]/85 px-4 pb-3 pt-3 text-lg leading-6 text-[#bfefff] shadow-[0_0_24px_rgba(80,220,255,0.2)] transition-[transform,opacity] duration-300 ease-out motion-reduce:transition-none ${shipOpen ? "translate-x-0 opacity-100" : "translate-x-[calc(100%+24px)] opacity-0"}`}
+              className={`absolute bottom-20 right-4 top-12 w-[300px] overflow-y-auto border border-t-[3px] border-[#9ff0ff]/35 bg-[#041019]/85 px-4 pb-3 pt-3 text-lg leading-6 text-[#bfefff] shadow-[0_0_24px_rgba(80,220,255,0.2)] transition-[transform,opacity] duration-300 ease-out motion-reduce:transition-none max-[700px]:inset-x-2 max-[700px]:bottom-16 max-[700px]:top-auto max-[700px]:h-[52%] max-[700px]:w-auto ${shipOpen ? "translate-x-0 opacity-100" : "translate-x-[calc(100%+24px)] opacity-0 max-[700px]:translate-x-0 max-[700px]:translate-y-[calc(100%+80px)]"}`}
               style={{ borderTopColor: shipColor }}
             >
               {ship && (
@@ -1546,6 +1868,24 @@ export default function Holomap() {
                       </dl>
                     </section>
                   ))}
+                  {!classB && ship.dest && (
+                    port ? (
+                      <button
+                        type="button"
+                        onClick={() => api.current?.routeShip({
+                          name: ship.name, port: port.name, lon: ship.lon, lat: ship.lat, portLon: port.lon, portLat: port.lat,
+                          kn: ship.sog >= 1 ? Math.max(6, Math.round(ship.sog)) : SHIP_KN_START,
+                          cog: ship.sog >= 1 ? ship.cog : null, eta: parseAisEta(ship.eta),
+                        })}
+                        className="mt-3 block w-full cursor-pointer border border-[#ffd27a]/50 px-2 text-left text-[#ffd27a] outline-none [text-shadow:0_0_6px_rgba(255,200,110,0.6)] hover:bg-[#ffd27a]/10 focus-visible:outline focus-visible:outline-1 focus-visible:outline-[#ffd27a]"
+                      >
+                        ROUTE TO {port.name} →
+                        <span className="block text-sm leading-4 opacity-70">Compare its heading and ETA with the optimal route</span>
+                      </button>
+                    ) : (
+                      <p className="mt-2 text-sm leading-5 opacity-45">DESTINATION NOT RECOGNISED</p>
+                    )
+                  )}
                   {!ship.len && !ship.call && !ship.lost && (
                     <p className="mt-2 text-sm leading-5 opacity-45">
                       {classB ? "Type, call sign and size arrive every ~6 min." : "Size, voyage and call sign arrive every ~6 min per ship."}
@@ -1563,7 +1903,32 @@ export default function Holomap() {
               )}
             </aside>
 
-            <div className={`pointer-events-none absolute bottom-4 right-6 flex flex-col items-end gap-1 ${glow}`}>
+            <RoutePanel
+              open={panel === "route"}
+              info={routeInfo}
+              play={play}
+              market={market}
+              setMarket={setMarket}
+              onClose={() => api.current?.closeRoute()}
+              onSpeed={(k) => {
+                setSpeed(k);
+                setKnotsRef.current(k);
+              }}
+              onPlay={() => api.current?.play()}
+              onSeek={(t) => api.current?.seek(t)}
+            />
+
+            <Toolbar
+              tool={toolUi}
+              hint={hint}
+              copied={copied}
+              onTool={(t) => api.current?.setTool(t)}
+              onClear={() => api.current?.clear()}
+              onShare={() => api.current?.share()}
+              onAbout={() => setAbout(true)}
+            />
+
+            <div className={`pointer-events-none absolute bottom-4 right-6 flex flex-col items-end gap-1 max-[700px]:hidden ${glow}`}>
               <span ref={hud.scaleLabel} className="text-2xl leading-none">--</span>
               <div ref={hud.scaleBar} className="relative h-2 border-x-2 border-b-2 border-[#9ff0ff]/70">
                 <div className="absolute bottom-0 left-1/2 h-1.5 w-0.5 -translate-x-1/2 bg-[#9ff0ff]/70" />
@@ -1573,15 +1938,18 @@ export default function Holomap() {
         </div>
       </div>
 
-      <div className="pointer-events-none fixed bottom-3 left-3 rounded-sm bg-black/85 px-2 py-1.5 text-lg leading-6 text-white/90">
+      <AboutPanel open={about} onClose={() => setAbout(false)} />
+
+      <div className="pointer-events-none fixed bottom-3 left-3 rounded-sm bg-black/85 px-2 py-1.5 text-lg leading-6 text-white/90 max-[700px]:hidden">
         {[
           [["drag", "w", "a", "s", "d"], "pan"],
           [["scroll", "up", "down"], "zoom"],
-          [["e"], "hold: bearing"],
-          [["e", "click"], "fuel-optimal route"],
-          [["esc"], "clear route"],
+          [["r"], "route tool"],
+          [["b"], "bearing tool"],
+          [["space"], "play voyage"],
+          [["esc"], "clear"],
           [["t"], tilt ? "flatten" : "tilt"],
-          [["p"], "pause"],
+          [["?"], "how it works"],
         ].map(([ks, label]) => (
           <div key={label as string} className="flex items-center gap-1">
             {(ks as string[]).map((k) => (

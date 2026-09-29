@@ -9,14 +9,62 @@ rings; blue lines offshore are real depth contours (200 m, 1000 m … 4000 m). T
 pixel streaks are the live surface current: each streak moves the way the water is going,
 and brighter/longer means faster.
 
+## First visit
+With no link, the table opens on a demo: it plots a fuel-optimal route from Cape Hatteras to south of Nova
+Scotia through today's Gulf Stream, opens the route panel, and shows one hint ("Tap ROUTE to plot your own").
+The hint goes away at the first touch, click or key. A returning visitor doesn't get the demo again (the
+browser remembers `holomap.seen`).
+
+## Toolbar (bottom centre of the table)
+- **BEARING** — press and drag to measure (on a phone, dragging measures instead of panning). The measurement
+  stays pinned until you tap again, pick another tool, or press **Esc**. Key: **B**.
+- **ROUTE** — tap the start, then the destination (the hint above the toolbar says which). Key: **R**.
+- **CLEAR** — removes the route and any measurement.
+- **SHARE** — copies a link to exactly this view, layer, speed and route ("LINK COPIED"). The address bar
+  always holds the same link, so copying it works too: `#v=lon,lat,widthKm&l=wind&kn=10&r=lon1,lat1,lon2,lat2`.
+  Opening a link restores all of it and re-plots the route.
+- **?** — the "How it works" panel: what you're looking at, where the data comes from, how the planner works
+  (with a small diagram), limits, keys, and the credit line. Key: **?**. Closes with ×, Esc or a click outside.
+
+## Route panel (right side; a bottom sheet on phones)
+Opens by itself when a route is plotted on a wide screen; on a phone, tap the amber label at the destination.
+- Distance, time at sea, arrival (UTC), legs, canals, lock time, fuel saved vs the direct line.
+- **Cost at this speed:** fuel (tonnes and $), CO₂, ship time $ and the total.
+- **Cost by speed chart:** fuel $, ship time $ and total at every speed, with the cheapest speed marked.
+  Hover/tap a speed for its numbers; click to re-plot at it. **SAIL AT CHEAPEST** does the same for the
+  cheapest. The fuel price ($/t) and ship cost ($/day) boxes change the answer: dearer fuel → slow down.
+- **Playback:** ▶ (or **Space**) sails the voyage: an amber ship moves along the route, about one voyage-day
+  per 2 seconds, and the panel shows the day, time, and wind and current at the ship. With **WIND** on, the
+  streaks near the route show the forecast wind for that moment, so you watch the weather move past. Drag
+  the slider to scrub.
+- The amber label on the map is now two lines (speed, distance and time); it hides while the panel is open.
+
+## Real ships vs the optimal route
+Click a ship. If its broadcast destination is a port the map knows (~160 major ports, `lib/ports.ts`), the
+panel shows **ROUTE TO <PORT>**: it plots the optimal route from where the ship is now, at the ship's own
+speed, and compares its **heading** with the route's first leg ("ON THE OPTIMAL HEADING" within 10°) and
+its **reported ETA** with the optimal one. AIS doesn't say how much fuel a ship burns, so there's no fuel
+comparison. Unknown destinations say "DESTINATION NOT RECOGNISED". Changing the speed afterwards drops the
+comparison (it's only fair at the ship's own speed).
+
+## Phones and touch
+Pinch to zoom, drag to pan, double-tap to zoom in. The table starts flat under 700 px wide, the keyboard
+help, lat/lon readout, scale bar and the top bar's data credits are hidden (the credits are in the ? panel),
+and the ship and route panels slide up from the bottom.
+
+## Sharing preview
+`app/opengraph-image.png` (a 1200×630 screenshot of the demo) is what shows when the link is pasted into a
+chat or social post; the title and description are in `app/layout.tsx`. To refresh it, screenshot the demo at
+1200×630 and replace the file.
+
 ## Controls
 - **Drag** or **W A S D** — pan. Going east or west never ends: you loop around the globe. North and south stop at the top and bottom of the map. Zooming out stops at one whole world across the screen.
 - **Scroll** or **↑ / ↓** — zoom (about 1.8× per mouse-wheel notch; roughly 12 notches from the whole world to the closest zoom, ~20 km across)
 - **Hold E** — bearing tool: drops a mark at the cursor; move the cursor and an arrow shows the compass bearing (0° = north, clockwise, with the arc drawn from north) plus distance in km and nautical miles. Lines and arc are chunky pixels to match the current streaks; the numbers sit on a dark plate in the HUD pixel font so they stay readable. On this map a straight line is a constant-heading course, so the number is the heading to steer. Release E to clear it.
-- **Hold E + click** — fuel-optimal route: while holding E (the bearing's start mark is the departure point), click anywhere to set the destination. An amber dashed course appears: the route that burns the least fuel. The ship is assumed to run at constant engine power, so fuel burned goes up with time at sea. The route rides helpful currents (e.g. up the Gulf Stream), avoids foul ones and strong headwinds, goes around land, and stays out of water shallower than 15 m. **Wind is the forecast for the hour the ship actually gets there** (NOAA GFS, up to 16 days ahead; after that the last forecast holds). Currents are today's, since that data has no forecast (they change slowly). It goes **through the Panama, Suez and Kiel canals** (adding 8 h, 4 h and 2 h for locks and queues) and keeps narrow straits (Gibraltar, Dover, Bosporus, Dardanelles, Bab-el-Mandeb, Hormuz, Malacca/Singapore, Øresund, Bering) open even on long routes. Distances use the real round earth; open-water legs are great circles, the shortest path on a globe, which is why long crossings curve toward the pole on this flat map. It draws a first version at once, then refines it with the wind forecast. The amber label shows distance, time at sea, legs, arrival time (UTC), estimated fuel in tonnes, which canal it uses, and how much less fuel it burns than the direct line. The route stays after you let go of E; **Esc** clears it. Clicking on land or shallows (a port) starts or ends at the nearest deep water.
+- **Hold E + click** — fuel-optimal route: while holding E (the bearing's start mark is the departure point), click anywhere to set the destination. An amber dashed course appears: the route that burns the least fuel. The ship is assumed to run at constant engine power, so fuel burned goes up with time at sea. The route rides helpful currents (e.g. up the Gulf Stream), avoids foul ones and strong headwinds, goes around land, and stays out of water shallower than 15 m. **Wind is the forecast for the hour the ship actually gets there** (NOAA GFS, up to 16 days ahead; after that the last forecast holds). Currents are today's, since that data has no forecast (they change slowly). It goes **through the Panama, Suez and Kiel canals** (adding 8 h, 4 h and 2 h for locks and queues) and keeps narrow straits (Gibraltar, Dover, Bosporus, Dardanelles, Bab-el-Mandeb, Hormuz, Malacca/Singapore, Øresund, Bering) open even on long routes. Distances use the real round earth; open-water legs are great circles, the shortest path on a globe, which is why long crossings curve toward the pole on this flat map. It draws a first version at once, then refines it with the wind forecast. The amber label shows distance, time at sea, legs, arrival time (UTC), estimated fuel in tonnes, which canal it uses, and how much less fuel it burns than the direct line. The route stays after you let go of E; **Esc** clears it. Clicking on land or shallows (a port) starts or ends at the nearest deep water that actually connects to the other end, crossing shallows but never dry land to get there (so a harbour whose dredged channel the depth data doesn't show, like New York's, still works).
   - **SPEED ◀ ▶** (under SHIPS in the layer picker): 6 to 24 knots. Changing it re-plots the route. Fuel per day grows with the cube of speed, so slower is much cheaper per trip (e.g. Med to Arabian Sea: ~294 t at 12 kn, ~131 t at 8 kn).
   - Not modelled: canal tolls and booking, dredged harbour channels (so a port click connects straight from the nearest deep water), ice, piracy zones, traffic separation lanes, waves separately from wind.
-  - To tune: in `components/Holomap.tsx`, `SPEEDS` / `SHIP_KN_START` (speed choices), `FUEL_T_PER_DAY` (tonnes per day at 12 kn; 25 suits a mid-size cargo ship) and `MIN_DEPTH_M` (shallowest water allowed). In `lib/route.ts`, `WIND_LOSS` / `WIND_GAIN` (how much head/tail wind slows or speeds the ship) and `PASSAGES` (canal and strait centre lines, lock delays).
+  - To tune: in `components/Holomap.tsx`, `SPEEDS` / `SHIP_KN_START` (speed choices) and `MIN_DEPTH_M` (shallowest water allowed). In `lib/economics.ts`, `DEFAULT_MARKET`: fuel price, ship cost per day, `burn12` (tonnes per day at 12 kn; 25 suits a mid-size cargo ship) and the CO₂ factor. In `lib/route.ts`, `WIND_LOSS` / `WIND_GAIN` (how much head/tail wind slows or speeds the ship) and `PASSAGES` (canal and strait centre lines, lock delays).
 - **T** — switch between the tilted table and a flat full-screen map. The switch is animated like dipping your head over the table: the table pitches down to face you and grows until the bezel slides off-screen, and back again. Both views are the same table with the same layout: flat is just the table leveled and scaled up to fill the screen, so the top bar, buttons and scale bar keep their exact proportions. The table is always the same shape as your browser window. Skipped if your system has "reduce motion" turned on.
 - **Layer picker** (top-left of the table): click **OCEAN CURRENT** or **WIND** — the glowing square next to the chosen one fills in. Wind is measured 10 m above the surface. Wind streaks are pale white-blue and also flow over land. The top bar reads "WIND: 12 KN FROM 225°" (wind is quoted by where it comes from; currents by where they go).
 - **P** — pause the current animation
@@ -40,7 +88,12 @@ The map reads in layers, lit from the upper left:
 - **Coastlines + depth contours:** Natural Earth (public domain), pre-shrunk into `public/geo.json` by `scripts/build_geo.py` (run it on the Natural Earth GeoJSON files from github.com/nvkelso/natural-earth-vector). It also stores the depth areas as filled shapes, which is what shades deeper water darker. Lakes (the Great Lakes and ~460 others) are cut out of the land as water with a single glowing shoreline (the inland contour rings and sea halo only follow the ocean coast), and rivers are drawn as faint glowing lines on the land: big rivers always, smaller ones appearing as you zoom in. This is why ships on the Great Lakes, the St. Lawrence, the Hudson, the Mississippi and so on sit on water instead of floating over land.
 
 ## Files
-- `components/Holomap.tsx` — the whole map: drawing, streaks, controls, HUD, table frame
+- `components/Holomap.tsx` — the whole map: drawing, streaks, controls, HUD, table frame, ship panel
+- `components/Toolbar.tsx` — the BEARING / ROUTE / CLEAR / SHARE / ? buttons and the hint line
+- `components/RoutePanel.tsx` — route details, cost-by-speed chart, playback controls
+- `components/AboutPanel.tsx` — the "How it works" overlay
+- `lib/economics.ts` — voyage cost at each speed (fuel, CO₂, ship time, cheapest speed)
+- `lib/ports.ts` — ~160 major ports and the matcher for ships' free-text destinations; `lib/ports.check.ts` proves it and the cost maths
 - `lib/geo.ts` — map maths (projection, current direction → arrow, interpolation)
 - `lib/currents.ts` — fetches the global current or wind grid from the server (once per hour per visitor)
 - `app/api/currents/route.ts` — downloads + decodes the global NOAA current grid, caches it for 6 h
@@ -68,6 +121,7 @@ The map reads in layers, lit from the upper left:
   - **Click a ship** to open its info panel on the right of the table: type, name, MMSI, status (under way / anchored / moored…), speed, course, heading, destination, ETA, size, draught, call sign, IMO, position and how long ago it last reported, plus a MarineTraffic link. The ship gets corner brackets on the map and its **past course** is drawn behind it: an X at each position it reported over the last 6 hours, joined by straight lines, ending at the ship. The server keeps at most one report per 30 s per ship (one per 10 min while it sits still), and when zoomed out, Xs that would overlap are skipped (the line still passes through them). Tracks are recorded by the server while it runs, so right after a restart they start short and grow. It refreshes every 3 s. Close with ×, **Esc**, or by clicking empty map. Size, destination and call sign come from a separate AIS message each ship sends every ~6 min, so they show "--" until it arrives. Small boats (pleasure craft, small fishing boats) carry cheaper "Class B" transponders that never send status, destination, ETA, draught or IMO, so their panel says SMALL CRAFT (AIS CLASS B) and leaves those rows out.
 
 ## Recent changes
+- 2026-09-28: Portfolio round: toolbar (BEARING, ROUTE, CLEAR, SHARE, ?), touch (pinch, double-tap, tap-tap routes, drag-to-measure), shareable links in the address bar, a first-visit demo route, a route panel with fuel/CO₂/cost and a cost-by-speed chart, voyage playback with forecast wind, ROUTE TO a ship's destination with heading/ETA comparison, a "How it works" panel, phone layout, and a link preview image. Planner fix: routes to harbours behind shallows (e.g. New York) no longer fail.
 - 2026-09-28: Route planner upgrades: goes through the Panama/Suez/Kiel canals and keeps narrow straits open, avoids shallow water, uses the wind forecast along the voyage, no longer cuts across headland corners, speed control with fuel-in-tonnes and arrival time, label no longer covers the route.
 - 2026-09-28: Added the fuel-optimal route: hold E, click a destination, and the map plots the cheapest course through live currents and wind, around land, along great circles.
 - 2026-09-28: Click a ship to open a live info panel (voyage, vessel size, position, MarineTraffic link).

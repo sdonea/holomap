@@ -131,7 +131,7 @@ Everything else (currents, wind, terrain, routing) works anywhere.
 (item 1). Pure logic in `lib/ports.ts`, `lib/economics.ts`, each with a `*.check.ts`. The map talks to the
 panels through React state set from the drawing loop (the same pattern as the ship panel).
 
-## Progress (paused 2026-09-28, usage limit)
+## Progress (all five built and verified 2026-09-28; hosting decision above still open)
 
 Done and checked:
 - `lib/ports.ts`: ~160 ports + `matchDestination` + `parseAisEta`. `lib/economics.ts`: cost at each speed, cheapest speed.
@@ -158,9 +158,9 @@ Next: wire it all into `components/Holomap.tsx` (nothing there has changed yet t
 - Phone: start flat under 700 px, hide the key-help box and lat/lon readout, toolbar bottom-centre.
 - Then: OG image (`app/opengraph-image.png`) + title/description, SITE.md, full desktop + phone verification.
 
-- [ ] 1. Findable tools, touch, shareable links, demo on load
-- [ ] 2. Real ships vs the optimal route (logic done, UI wiring left)
-- [ ] 3. Fuel economics (logic + panel done, wiring left)
-- [ ] 4. Voyage playback (panel controls done, engine left)
-- [ ] 5. How it works panel (content done, wiring + OG image left)
-- [ ] SITE.md updated for all of it
+- [x] 1. Findable tools, touch, shareable links, demo on load
+- [x] 2. Real ships vs the optimal route
+- [x] 3. Fuel economics
+- [x] 4. Voyage playback
+- [x] 5. How it works panel + OG image
+- [x] SITE.md updated for all of it

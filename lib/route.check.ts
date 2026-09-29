@@ -12,13 +12,13 @@ const field = (fn: (lon: number, lat: number) => [number, number]): Field => {
   return f;
 };
 const steady = (f: Field): WindSeries => ({ start: 0, step: 3600, fields: [f] });
-// Like the map's canvas raster: 2 = cell centre on land, 1 = land somewhere in the cell (3x3 samples), 0 = open.
-const maskOf = (isLand: (lon: number, lat: number) => boolean): LandMask => (x0, y0, s, cols, rows) => {
+// Like the map's canvas raster: v = cell centre on land (2) or in shallows (3), 1 = land somewhere in the cell (3x3 samples), 0 = open.
+const maskOf = (isLand: (lon: number, lat: number) => boolean, v = 2): LandMask => (x0, y0, s, cols, rows) => {
   const m = new Uint8Array(cols * rows);
   for (let j = 0; j < rows; j++)
     for (let i = 0; i < cols; i++) {
       const at = (fx: number, fy: number) => isLand(...fromMerc(x0 + (i + fx) * s, y0 + (j + fy) * s));
-      m[j * cols + i] = at(0.5, 0.5) ? 2 : [0, 0.5, 1].some((fx) => [0, 0.5, 1].some((fy) => at(fx, fy))) ? 1 : 0;
+      m[j * cols + i] = at(0.5, 0.5) ? v : [0, 0.5, 1].some((fx) => [0, 0.5, 1].some((fy) => at(fx, fy))) ? 1 : 0;
     }
   return m;
 };
@@ -88,6 +88,18 @@ assert.equal(await planRoute([0, 0], [10, 0], env(field(() => [0, 10])), sea), n
 {
   const r = (await planRoute([0, 0], [10, 0], env(), maskOf((lon, lat) => lon >= 4 && lon <= 6 && lat > -3 && lat < 3)))!;
   assert.ok(r.pts.some((p) => Math.abs(p[1]) > 2.5), "route goes around the shoal");
+}
+
+// Harbour pocket: the destination sits in deep water walled off by a ring of shallows (a port whose dredged
+// channel the depth data doesn't show, like New York's Narrows). The route ends at the nearest water that
+// actually connects, instead of snapping into the pocket and finding no way out.
+{
+  const ring = (lon: number, lat: number) => { const d = Math.hypot(lon - 10, lat); return d > 0.6 && d < 1.2; };
+  const r = await planRoute([0, 0], [10, 0], env(), maskOf(ring, 3));
+  assert.ok(r, "route to a walled-off harbour");
+  assert.deepEqual(r!.pts[r!.pts.length - 1], [10, 0], "still ends at the clicked port");
+  // the same ring of dry land (an inland lake) can't be reached from the sea
+  assert.equal(await planRoute([0, 0], [10, 0], env(), maskOf(ring)), null);
 }
 
 // Canal: a land band across the whole world at 8.95-9.3° N (like the isthmus of Panama). The only way

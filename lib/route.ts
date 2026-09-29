@@ -15,7 +15,8 @@ export type LonLat = [number, number];
 export type WindSeries = { start: number; step: number; fields: Field[] };
 export type Env = { current: Field | null; wind: WindSeries | null; knots: number };
 // Land raster for a box: cell (i, j) spans merc x0 + i*step and y0 + j*step, one step each way.
-// 0 = open water, 1 = water touching land (sailable, but no shortcuts through it), 2 = land or too shallow.
+// 0 = open water, 1 = water touching land (sailable, but no shortcuts through it), 2 = dry land,
+// 3 = water too shallow (blocked like land, but a port's approach may cross it; see `pieces`).
 export type LandMask = (x0: number, y0: number, step: number, cols: number, rows: number) => Uint8Array | Promise<Uint8Array>;
 export type Route = { pts: LonLat[]; hours: number; km: number; directHours: number | null; via: string[]; delayHours: number };
 
@@ -172,20 +173,67 @@ async function attempt(a: LonLat, b: LonLat, env: Env, landMask: LandMask, padF:
     }
     return true;
   };
-  // A click on land, a beach or shallows starts from the nearest sailable cell instead.
-  const snap = (p: LonLat) => {
-    const c = cellOf(p);
-    if (c < 0 || land[c] < 2) return c;
-    const ci = c % cols, cj = (c / cols) | 0;
-    let best = -1, bd = Infinity;
-    for (let dj = -40; dj <= 40; dj++)
-      for (let di = -40; di <= 40; di++) {
-        const i = ci + di, j = cj + dj, d = di * di + dj * dj;
-        if (i >= 0 && j >= 0 && i < cols && j < rows && land[j * cols + i] < 2 && d < bd) { bd = d; best = j * cols + i; }
+  // Sailable water in connected pieces, joined the way the search moves (straight, or diagonal past one
+  // open side). A click on land or shallows, or a harbour whose dredged channel the depth data doesn't
+  // show (New York's Narrows sits behind the shallow Lower Bay), can land in a pocket that can't reach the
+  // other end, so both ends snap to the nearest cells of one piece they share.
+  const piece = new Int32Array(n).fill(-1), stack: number[] = [];
+  for (let c0 = 0, id = 0; c0 < n; c0++) {
+    if (land[c0] >= 2 || piece[c0] >= 0) continue;
+    piece[c0] = id;
+    stack.push(c0);
+    while (stack.length) {
+      const c = stack.pop()!, i = c % cols, j = (c / cols) | 0;
+      for (let dj = -1; dj <= 1; dj++)
+        for (let di = -1; di <= 1; di++) {
+          const ni = i + di, nj = j + dj, q = nj * cols + ni;
+          if (ni < 0 || nj < 0 || ni >= cols || nj >= rows || land[q] >= 2 || piece[q] >= 0) continue;
+          if (di && dj && land[j * cols + ni] && land[nj * cols + i]) continue;
+          piece[q] = id;
+          stack.push(q);
+        }
+    }
+    id++;
+  }
+  // Nearest cell of every piece p can reach within 40 steps without crossing dry land (shallows are fine:
+  // that's a harbour approach): piece -> [cell, steps]. A click on dry land starts from the nearest cell
+  // that isn't.
+  const pieces = (p: LonLat) => {
+    let c = cellOf(p);
+    const m = new Map<number, [number, number]>();
+    if (c < 0) return m;
+    if (land[c] === 2) {
+      const ci = c % cols, cj = (c / cols) | 0;
+      let bd = Infinity;
+      c = -1;
+      for (let dj = -40; dj <= 40; dj++)
+        for (let di = -40; di <= 40; di++) {
+          const i = ci + di, j = cj + dj, d = di * di + dj * dj;
+          if (i >= 0 && j >= 0 && i < cols && j < rows && land[j * cols + i] !== 2 && d < bd) { bd = d; c = j * cols + i; }
+        }
+      if (c < 0) return m;
+    }
+    const steps = new Map([[c, 0]]), queue = [c];
+    for (let h = 0; h < queue.length; h++) {
+      const q = queue[h], d = steps.get(q)!, k = piece[q];
+      if (k >= 0 && !m.has(k)) m.set(k, [q, d]); // breadth-first, so the first cell seen is the nearest
+      if (d >= 40) continue;
+      const i = q % cols, j = (q / cols) | 0;
+      for (const [ni, nj] of [[i + 1, j], [i - 1, j], [i, j + 1], [i, j - 1]]) {
+        const r = nj * cols + ni;
+        if (ni < 0 || nj < 0 || ni >= cols || nj >= rows || land[r] === 2 || steps.has(r)) continue;
+        steps.set(r, d + 1);
+        queue.push(r);
       }
-    return best;
+    }
+    return m;
   };
-  const s = snap(a), e = snap(b);
+  const pb = pieces(b);
+  let s = -1, e = -1, sd = Infinity;
+  for (const [k, [ca, da]] of pieces(a)) {
+    const hit = pb.get(k);
+    if (hit && da + hit[1] < sd) { sd = da + hit[1]; s = ca; e = hit[0]; }
+  }
   if (s < 0 || e < 0) return null;
 
   // Cell centres and each sailable cell's current, sampled once (currents barely change over a voyage).
