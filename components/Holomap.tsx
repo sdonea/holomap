@@ -270,6 +270,8 @@ export default function Holomap() {
       for (let i = 0; i < px.length; i++) age[i] = Math.random() * life[i]; // desync lifetimes
       img?.data.fill(0);
     };
+    let scratch = new Uint8ClampedArray(0); // reused by shiftTrails/zoomTrails: a fresh 0.6 MB per pan frame fed the GC
+    const scratchFor = (n: number) => (scratch.length === n ? scratch : (scratch = new Uint8ClampedArray(n)));
     const shiftTrails = (dx: number, dy: number) => {
       shift.x += dx / PIX;
       shift.y += dy / PIX;
@@ -279,7 +281,8 @@ export default function Holomap() {
       if (!ix && !iy) return;
       for (let i = 0; i < px.length; i++) { px[i] += ix; py[i] += iy; }
       if (!img) return;
-      const src = img.data, out = new Uint8ClampedArray(src.length);
+      const src = img.data, out = scratchFor(src.length);
+      out.fill(0);
       const a = Math.max(0, ix), b = Math.min(fw, fw + ix);
       if (b > a)
         for (let y = 0; y < fh; y++) {
@@ -308,7 +311,8 @@ export default function Holomap() {
         }
       }
       if (!img) return;
-      const d = new Uint32Array(img.data.buffer), old = d.slice();
+      const d = new Uint32Array(img.data.buffer), old = new Uint32Array(scratchFor(img.data.length).buffer);
+      old.set(d);
       for (let y = 0; y < fh; y++) {
         const sy = Math.floor((y + 0.5 - cy) / a);
         for (let x = 0; x < fw; x++) {
@@ -618,14 +622,17 @@ export default function Holomap() {
       for (const { x: fx, y: fy, ships: [sh] } of singles) {
         const x = Math.round(fx), y = Math.round(fy), g = litOf(shipKind(sh.type).color);
         if (sh.cog == null || sh.sog < 0.5) { // stopped / anchored: hollow diamond with a centre pip
-          g.line.moveTo(x, y - 6); g.line.lineTo(x + 6, y); g.line.lineTo(x, y + 6); g.line.lineTo(x - 6, y); g.line.closePath();
+          // Chrome's closePath gets slower the more subpaths a path holds (quadratic over a busy port), so
+          // outlines close by retracing their first edge and fills rely on fill() closing subpaths itself.
+          g.line.moveTo(x, y - 6); g.line.lineTo(x + 6, y); g.line.lineTo(x, y + 6); g.line.lineTo(x - 6, y); g.line.lineTo(x, y - 6); g.line.lineTo(x + 6, y);
           g.dot.rect(x - 1, y - 1, 2, 2);
         } else { // moving: holo arrow along course, leader line length = speed
           const a = (sh.cog * Math.PI) / 180, cs = Math.cos(a), sn = Math.sin(a); // 0 = north, clockwise
           const at = (px: number, py: number): [number, number] => [x + px * cs - py * sn, y + px * sn + py * cs];
           for (const path of [g.line, g.fill]) {
-            path.moveTo(...at(0, -9)); path.lineTo(...at(6.5, 7)); path.lineTo(...at(0, 3)); path.lineTo(...at(-6.5, 7)); path.closePath();
+            path.moveTo(...at(0, -9)); path.lineTo(...at(6.5, 7)); path.lineTo(...at(0, 3)); path.lineTo(...at(-6.5, 7));
           }
+          g.line.lineTo(...at(0, -9)); g.line.lineTo(...at(6.5, 7));
           g.lead.moveTo(...at(0, -12));
           g.lead.lineTo(...at(0, -12 - Math.min(40, 4 + sh.sog * 2)));
         }
@@ -694,8 +701,7 @@ export default function Holomap() {
         for (const r of [...land, ...lakes]) {
           if (r.x1 + tx < x0 || r.x0 + tx > x1 || r.y1 < y0 || r.y0 > y1) continue;
           p.moveTo(r.pts[0] + tx, r.pts[1]);
-          for (let i = 2; i < r.pts.length; i += 2) p.lineTo(r.pts[i] + tx, r.pts[i + 1]);
-          p.closePath();
+          for (let i = 2; i < r.pts.length; i += 2) p.lineTo(r.pts[i] + tx, r.pts[i + 1]); // fill() closes it (no closePath: see drawShipMarks)
         }
       c.setTransform(1 / step, 0, 0, 1 / step, -x0 / step, -y0 / step);
       c.fill(p, "evenodd");
@@ -1161,8 +1167,9 @@ export default function Holomap() {
             lx = x;
             ly = y;
           }
-          if (how === "fill") ctx.closePath();
-          else if (how === "outline" && !onCut(p, n - 2, 0)) ctx.lineTo(ox + p[0] * k, oy + p[1] * k);
+          // "fill" paths are only filled/clipped, which close each subpath themselves; an explicit closePath
+          // is quadratic in Chrome and cost 100+ ms a frame over thousands of rings when zoomed out.
+          if (how === "outline" && !onCut(p, n - 2, 0)) ctx.lineTo(ox + p[0] * k, oy + p[1] * k);
         }
       }
     };
