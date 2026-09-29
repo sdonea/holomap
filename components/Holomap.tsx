@@ -1860,7 +1860,7 @@ export default function Holomap() {
               ‖ PAUSED
             </div>
 
-            <div className={`pointer-events-none absolute left-5 -skew-x-12 text-4xl leading-none text-[#8fe9ff]/35 transition-[bottom] duration-[900ms] ease-[cubic-bezier(0.65,0,0.35,1)] max-[700px]:hidden ${tilt ? "bottom-3" : "bottom-32"}`}>
+            <div className={`pointer-events-none absolute left-5 -skew-x-12 text-4xl leading-none text-[#8fe9ff]/35 transition-[bottom] duration-[900ms] ease-[cubic-bezier(0.65,0,0.35,1)] max-[700px]:hidden ${tilt ? "bottom-3" : "bottom-16"}`}>
               <div ref={hud.lat}>N 00.000°</div>
               <div ref={hud.lon}>W 000.000°</div>
             </div>
@@ -1974,7 +1974,10 @@ export default function Holomap() {
 
       <AboutPanel open={about} onClose={() => setAbout(false)} />
 
-      <div className="pointer-events-none fixed bottom-3 left-3 rounded-sm bg-black/85 px-2 py-1.5 text-lg leading-6 text-white/90 max-[700px]:hidden">
+      {/* Key help folds into a one-line chip so it never covers the table's coordinates; hover or focus
+          unfolds it, click opens the full "How it works" panel (which lists every key too). */}
+      <div className="group fixed bottom-3 left-3 rounded-sm bg-black/85 px-2 py-1.5 text-lg leading-6 text-white/90 max-[700px]:hidden">
+        <div className="hidden pb-1 group-focus-within:block group-hover:block">
         {[
           [["drag", "w", "a", "s", "d"], "pan"],
           [["scroll", "up", "down"], "zoom"],
@@ -1983,7 +1986,7 @@ export default function Holomap() {
           [["space"], "play voyage"],
           [["esc"], "clear"],
           [["t"], tilt ? "flatten" : "tilt"],
-          [["?"], "how it works"],
+          [["p"], "pause streaks"],
         ].map(([ks, label]) => (
           <div key={label as string} className="flex items-center gap-1">
             {(ks as string[]).map((k) => (
@@ -1994,6 +1997,11 @@ export default function Holomap() {
             <span className="ml-1">{label as string}</span>
           </div>
         ))}
+        </div>
+        <button type="button" onClick={() => setAbout(true)} className="flex cursor-pointer items-center gap-1 outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-[#9ff0ff]">
+          <kbd className="rounded-[3px] bg-white/15 px-1 font-[family-name:var(--font-pixel)] leading-5">?</kbd>
+          <span className="ml-1">keys</span>
+        </button>
       </div>
     </main>
   );
