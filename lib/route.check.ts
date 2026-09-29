@@ -1,6 +1,6 @@
 // Run: node lib/route.check.ts   — fails loudly if the fuel-optimal route planner breaks.
 import assert from "node:assert/strict";
-import { fromMerc, rhumb, type Field } from "./geo.ts";
+import { fromMerc, rhumb, toMerc, type Field } from "./geo.ts";
 import { bestSaving, gcAt, gcMetres, planRoute, WIND_GAIN, WIND_LOSS, type LandMask, type LonLat, type WindSeries } from "./route.ts";
 
 const V = 12 * 0.514444; // 12 kn in m/s
@@ -118,6 +118,20 @@ assert.equal(await planRoute([0, 0], [10, 0], env(field(() => [0, 10])), sea), n
   const r = (await planRoute([142, 35], [-125, 37], env(), sea))!;
   close(r.km, gcMetres([142, 35], [-125, 37]) / 1000, 1e-9);
   assert.ok(gcAt([142, 35], [-125, 37], 0.5)[1] > 45, "transpacific great circle arcs far north");
+}
+
+// Search replay: the recorded order starts at the start's cell and ends on the destination's, one entry per cell.
+{
+  const r = (await planRoute([0, 0], [10, 0], env(), sea))!, { x0, y0, step, cols, order } = r.search;
+  const cellOf = ([lon, lat]: LonLat) => { const [x, y] = toMerc(lon, lat); return Math.floor((y - y0) / step) * cols + Math.floor((x - x0) / step); };
+  assert.equal(order[0], cellOf([0, 0]));
+  assert.equal(order[order.length - 1], cellOf([10, 0]));
+  assert.equal(new Set(order).size, order.length);
+  // still water: the time to reach the goal cell is the route's time (to within a cell), and the grid path runs start -> goal
+  const { secs, path } = r.search;
+  close(secs[secs.length - 1] / 3600, r.hours, 0.05);
+  assert.equal(path[0], order[0]);
+  assert.equal(path[path.length - 1], order[order.length - 1]);
 }
 
 // Demo picker: a 1.5 m/s eastward jet at 0-2° N. Westbound along the jet is the trip with room to save

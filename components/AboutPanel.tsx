@@ -42,7 +42,9 @@ function Diagram() {
   );
 }
 
-export default function AboutPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+type Props = { open: boolean; onClose: () => void; think: boolean; onThink: (on: boolean) => void };
+
+export default function AboutPanel({ open, onClose, think, onThink }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -107,6 +109,18 @@ export default function AboutPanel({ open, onClose }: { open: boolean; onClose: 
             <b>Search.</b> A grid of about 320 cells across is laid over the map around both points. A* search finds the
             fastest path through it in 16 directions, reading the current in each cell and the forecast wind for the hour the
             ship would get there. Distances are measured on a round earth.
+            <button
+              type="button"
+              role="switch"
+              aria-checked={think}
+              onClick={() => onThink(!think)}
+              className="mt-2 flex cursor-pointer items-center gap-2.5 text-left outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-[#9ff0ff]"
+            >
+              <span className={`relative h-5 w-9 shrink-0 border transition-colors ${think ? "border-[#ffd27a] bg-[#ffd27a]/20" : "border-[#9ff0ff]/40 bg-transparent"}`}>
+                <span className={`absolute top-[3px] h-3 w-3 transition-[left,background-color] ${think ? "left-[19px] bg-[#ffd27a] shadow-[0_0_6px_#ffd27a]" : "left-[3px] bg-[#9ff0ff]/60"}`} />
+              </span>
+              <span><b>WATCH IT THINK</b> <span className="opacity-70">· before each route, watch the search spread in rings of equal sailing time, trace back the fastest path and pull it tight</span></span>
+            </button>
           </li>
           <li>
             <b>Pull tight.</b> The zig-zag grid path is replaced by the fewest great-circle legs that are no slower and never

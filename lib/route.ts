@@ -18,7 +18,11 @@ export type Env = { current: Field | null; wind: WindSeries | null; knots: numbe
 // 0 = open water, 1 = water touching land (sailable, but no shortcuts through it), 2 = dry land,
 // 3 = water too shallow (blocked like land, but a port's approach may cross it; see `pieces`).
 export type LandMask = (x0: number, y0: number, step: number, cols: number, rows: number) => Uint8Array | Promise<Uint8Array>;
-export type Route = { pts: LonLat[]; hours: number; km: number; directHours: number | null; via: string[]; delayHours: number };
+// search: the A* grid (Mercator corner x0,y0, cell size step, cols x rows), the cells in the order the
+// search settled them with the fastest time to reach each (secs, aligned with order), and the raw grid path
+// before it's pulled tight. For replaying how the planner worked ("watch it think").
+export type Search = { x0: number; y0: number; step: number; cols: number; rows: number; order: Int32Array; secs: Float32Array; path: Int32Array };
+export type Route = { pts: LonLat[]; hours: number; km: number; directHours: number | null; via: string[]; delayHours: number; search: Search };
 
 // Calibration knobs: share of speed through water lost per m/s of headwind / gained per m/s of tailwind.
 // 0.02 means a 30 kn (15 m/s) headwind costs 30%, in line with typical added-resistance figures for mid-size ships.
@@ -255,12 +259,15 @@ async function attempt(a: LonLat, b: LonLat, env: Env, landMask: LandMask, padF:
   const g = new Float64Array(n).fill(Infinity), from = new Int32Array(n).fill(-1), done = new Uint8Array(n);
   const open = heap();
   const blocked = (c: number) => land[c] >= 2;
+  const order: number[] = [], reached: number[] = [];
   g[s] = 0;
   open.push(s, h(s));
   while (open.size) {
     const c = open.pop();
     if (done[c]) continue;
     done[c] = 1;
+    order.push(c);
+    reached.push(g[c]);
     if (c === e) break;
     const i = c % cols, j = (c / cols) | 0;
     const w = windAt(env.wind, lon[i], lat[j], g[c]), wu = w?.[0] ?? 0, wv = w?.[1] ?? 0;
@@ -320,6 +327,7 @@ async function attempt(a: LonLat, b: LonLat, env: Env, landMask: LandMask, padF:
     pts: out, hours: total / 3600, km: m / 1000,
     directHours: direct != null && Number.isFinite(direct) ? direct / 3600 : null,
     via: canals.map((p) => p.name), delayHours: canals.reduce((sum, p) => sum + p.delay!, 0),
+    search: { x0, y0, step, cols, rows, order: Int32Array.from(order), secs: Float32Array.from(reached), path: Int32Array.from(path) },
   };
 }
 

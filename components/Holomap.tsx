@@ -4,7 +4,7 @@ import NextImage from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { fromMerc, rhumb, sample, toMerc, type Field } from "@/lib/geo";
 import { loadGrid, loadWindForecast, type Layer } from "@/lib/currents";
-import { bestSaving, gcAt, gcMetres, legSeconds, planRoute, windAt, type Env, type LandMask, type LonLat, type Route, type WindSeries } from "@/lib/route";
+import { bestSaving, gcAt, gcMetres, legSeconds, planRoute, windAt, type Env, type LandMask, type LonLat, type Route, type Search, type WindSeries } from "@/lib/route";
 import { matchDestination, parseAisEta, PORTS, type Port } from "@/lib/ports";
 import { DEFAULT_MARKET, type Market } from "@/lib/economics";
 import RoutePanel, { type PlayState, type RouteInfo } from "./RoutePanel";
@@ -96,7 +96,20 @@ const DEMO_PTS: [string, LonLat][] = [
 ];
 const DEMO_TRIPS = DEMO_PTS.flatMap(([na, a]) => DEMO_PTS.filter(([, b]) => b !== a && gcMetres(a, b) >= 500e3).map(([nb, b]) => ({ name: `${na} to ${nb}`, a, b })));
 const DEMO_FALLBACK = DEMO_TRIPS.find((t) => t.name === "Nova Scotia to Charleston")!;
+// Isochrones for "watch it think": a settled cell is on a ring when a settled neighbour was reached in an
+// earlier time band (band = secs). Rings of equal travel time bulge where the current helps.
+const isochrones = (S: Search, band: number) => {
+  const b = new Int32Array(S.cols * S.rows).fill(-1), ring = new Uint8Array(S.cols * S.rows);
+  S.order.forEach((c, q) => { b[c] = Math.floor(S.secs[q] / band); });
+  for (const c of S.order) {
+    const i = c % S.cols;
+    for (const nb of [c - 1, c + 1, c - S.cols, c + S.cols])
+      if (nb >= 0 && nb < b.length && Math.abs((nb % S.cols) - i) <= 1 && b[nb] >= 0 && b[nb] < b[c]) { ring[c] = 1; break; }
+  }
+  return ring;
+};
 const SEEN = "holomap.seen";
+const THINK = "holomap.think";
 // Ports on the map, hubs first: a label only draws where it doesn't overlap one drawn before it, so
 // zoomed out you see these, and the rest of lib/ports.ts fills in as you zoom.
 const HUBS = ("SGSIN CNSHA NLRTM USLAX USNYC AEJEA HKHKG KRPUS CNNGB DEHAM BEANR EGPSD PABLB BRSSZ ZADUR LKCMB " +
@@ -125,10 +138,21 @@ export default function Holomap() {
   const [play, setPlay] = useState<PlayState>(NO_PLAY);
   const [market, setMarket] = useState<Market>(DEFAULT_MARKET);
   const [about, setAbout] = useState(false);
+  // "Watch it think" (? panel): replay the planner's search before each route appears. Remembered per browser.
+  const [think, setThink] = useState(false);
+  const thinkRef = useRef(false);
+  useEffect(() => {
+    try { setThink(localStorage.getItem(THINK) === "1"); } catch { /* storage blocked: stays off */ }
+  }, []);
+  useEffect(() => {
+    thinkRef.current = think;
+    try { localStorage.setItem(THINK, think ? "1" : "0"); } catch { /* storage blocked: this visit only */ }
+  }, [think]);
   const [toolUi, setToolUi] = useState<Tool>("none");
   const [hint, setHint] = useState("");
   const [copied, setCopied] = useState(false);
   const api = useRef<Api | null>(null);
+  const thinkCapRef = useRef<HTMLDivElement>(null); // the step caption while a search replays
   const routePanelOpen = useRef(false); // the engine hides the map label while the panel shows the same numbers
   useEffect(() => { routePanelOpen.current = panel === "route"; }, [panel]);
   const closeShipRef = useRef<() => void>(() => {});
@@ -735,6 +759,8 @@ export default function Holomap() {
     // fit: once the first version is drawn, fly out to show the whole route (used for a ship's ROUTE TO)
     const plotRoute = async (from: [number, number], to: [number, number], ship?: ShipLeg, fit = false) => {
       const job = ++routeJob, kn = knots;
+      thinking = null;
+      caption("", "");
       const empty = (text: string): Plot => ({ from, to, line: [], joints: [], text: [text], times: [], wind: null, current: null, ship });
       setRoute(empty("PLOTTING ROUTE…"));
       setRouteInfo(blankInfo("plotting", kn));
@@ -753,6 +779,25 @@ export default function Holomap() {
         setRoute(empty("NO SEA ROUTE"));
         setRouteInfo(blankInfo("none", kn));
         return;
+      }
+      if (thinkRef.current) { // replay the search in three captioned steps, then let the route appear over it
+        const S = first.search, n = S.order.length, dur = Math.min(4500, Math.max(2500, n * 0.12));
+        const band = [1, 2, 3, 6, 12, 24, 48, 72].find((h) => h >= first.hours / 6) ?? 96;
+        const bandText = band < 24 ? `${band} hours` : band === 24 ? "a day" : `${band / 24} days`;
+        const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        setRoute(empty("SEARCHING…"));
+        thinking = { s: S, t0: performance.now(), dur, k: 0, back: 0, end: 0, img: new ImageData(2 * S.cols, 2 * S.rows), ring: isochrones(S, band * 3600) };
+        caption("1/3 SPREADING OUT", `Each dot is a spot the ship can reach, filled in fastest first. The rings are ${bandText} of sailing apart: wide where the current helps, squeezed where it fights.`);
+        await pause(dur);
+        if (job !== routeJob) return;
+        thinking.back = performance.now();
+        caption("2/3 FOUND IT", "The wave reached the destination. Following the fastest chain of dots back to the start.");
+        await pause(1300);
+        if (job !== routeJob) return;
+        thinking.end = performance.now();
+        const legs = first.pts.length - 1;
+        caption("3/3 PULLED TIGHT", `The zig-zag grid path becomes ${legs} straight leg${legs > 1 ? "s" : ""}, just as fast, and that's the route.`);
+        window.setTimeout(() => { if (job === routeJob) caption("", ""); }, 3500);
       }
       show(from, to, first, env0, "refining", "REFINING WITH WIND FORECAST…", ship);
       if (fit && route) flyToFit(route.line);
@@ -941,8 +986,56 @@ export default function Holomap() {
     // distance. Mercator straight line = rhumb line, so the drawn angle is the true course to steer.
     // Drawn on the same low-res grid as the current streaks (1 px = PIX CSS px), then hard-thresholded
     // so every pixel is fully on/off and the CSS upscale stays chunky. Glow comes from a CSS drop-shadow.
+    // "Watch it think": every settled cell becomes a dot on a small lattice image (2x2 px per planner cell,
+    // one lit, so the map shows between the dots; cells on a time ring light all four, so rings read as lines),
+    // stretched over the map. Rings and the wavefront (the newest cells) are white, apart from the cyan current
+    // streaks; then the grid path is traced back from the destination in amber, turning white as the tight
+    // amber route appears over it, and everything fades.
+    let thinking: { s: Search; t0: number; dur: number; k: number; back: number; end: number; img: ImageData; ring: Uint8Array } | null = null;
+    const thinkCanvas = document.createElement("canvas");
+    const caption = (step: string, text: string) => {
+      const el = thinkCapRef.current;
+      if (!el) return;
+      el.style.display = step ? "block" : "none";
+      el.firstElementChild!.textContent = step;
+      el.lastElementChild!.textContent = text;
+    };
+    const drawThinking = () => {
+      if (!thinking) return;
+      const { s, img, ring } = thinking, n = s.order.length, now = performance.now(), w = img.width * 4;
+      const fade = thinking.end ? 1 - (now - thinking.end) / 2500 : 1;
+      if (fade <= 0) { thinking = null; return; }
+      const k = Math.min(n, Math.floor((n * (now - thinking.t0)) / thinking.dur));
+      for (let q = thinking.k; q < k; q++) {
+        const c = s.order[q], o = ((c / s.cols | 0) * 2 * w) + (c % s.cols) * 8, on = ring[c];
+        for (const p of on ? [o, o + 4, o + w, o + w + 4] : [o]) { // rings white, so they don't read as current streaks
+          img.data[p] = on ? 255 : 159; img.data[p + 1] = on ? 255 : 240; img.data[p + 2] = 255; img.data[p + 3] = on ? 240 : 90;
+        }
+      }
+      thinking.k = k;
+      thinkCanvas.width = img.width; // also clears it
+      thinkCanvas.height = img.height;
+      thinkCanvas.getContext("2d")!.putImageData(img, 0, 0);
+      const [x0, y0] = toScreen(s.x0, s.y0), cell = s.step * view.scale, sz = Math.max(2 * PIX, cell);
+      const box = (c: number) => tctx.fillRect(x0 + (c % s.cols) * cell, y0 + Math.floor(c / s.cols) * cell, sz, sz);
+      tctx.imageSmoothingEnabled = false;
+      tctx.globalAlpha = fade;
+      tctx.drawImage(thinkCanvas, x0, y0, s.cols * cell, s.rows * cell);
+      if (!thinking.back) {
+        tctx.fillStyle = "#e6fdff";
+        for (let q = Math.max(0, k - Math.max(60, n / 30)); q < k; q++) box(s.order[q]);
+      } else if (!thinking.end) { // traced back in amber: this is the route being found
+        tctx.fillStyle = ROUTE;
+        const m = Math.ceil(s.path.length * Math.min(1, (now - thinking.back) / 1200));
+        for (let i = s.path.length - m; i < s.path.length; i++) box(s.path[i]);
+      } else { // then a thin white trail of the grid path beside the tight amber route that replaces it
+        tctx.fillStyle = "#ffffff";
+        for (const c of s.path) tctx.fillRect(x0 + (c % s.cols + 0.5) * cell - PIX / 2, y0 + (Math.floor(c / s.cols) + 0.5) * cell - PIX / 2, PIX, PIX);
+      }
+      tctx.globalAlpha = 1;
+    };
     const drawBearing = () => {
-      const key = `${view.cx},${view.cy},${view.scale},${W},${H},${cursor.x},${cursor.y},${bearingFrom},${bearingTo},${routeVer},${playT.toFixed(0)},${routePanelOpen.current}`;
+      const key = `${view.cx},${view.cy},${view.scale},${W},${H},${cursor.x},${cursor.y},${bearingFrom},${bearingTo},${routeVer},${playT.toFixed(0)},${routePanelOpen.current},${thinking ? performance.now() : ""}`;
       if (key === toolKey) return; // the route stays up, so skip the readback while nothing moves
       toolKey = key;
       tctx.setTransform(1 / PIX, 0, 0, 1 / PIX, 0, 0); // draw in CSS px, land on the low-res grid
@@ -964,6 +1057,7 @@ export default function Holomap() {
       const d = img.data;
       for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 70 ? 255 : 0;
       tctx.putImageData(img, 0, 0);
+      drawThinking();
     };
     const drawBearingShapes = (ax: number, ay: number) => {
       if (!bearingFrom) return;
@@ -1447,6 +1541,8 @@ export default function Holomap() {
       setHint(t === "route" ? "TAP START · A PORT OR ANY SEA POINT" : t === "bearing" ? "DRAG TO MEASURE" : "");
     };
     const clearAll = () => {
+      thinking = null;
+      caption("", "");
       setTool("none");
       routeJob++; // drop a route still being plotted
       setRoute(null);
@@ -1842,6 +1938,14 @@ export default function Holomap() {
               className="absolute hidden cursor-pointer whitespace-pre border border-[#ffd27a]/40 bg-[#1a1204]/80 px-2 py-0.5 text-xl leading-5 text-[#ffd27a] [text-shadow:0_0_6px_rgba(255,200,110,0.7)] hover:bg-[#2a1d06]/90"
             />
             <div
+              ref={thinkCapRef}
+              role="status"
+              className="pointer-events-none absolute left-1/2 top-12 hidden w-max max-w-[min(620px,80%)] -translate-x-1/2 border border-[#9ff0ff]/40 bg-[#041019]/85 px-3 py-1 text-center text-lg leading-6 text-[#bfefff] max-[700px]:top-10 max-[700px]:text-base max-[700px]:leading-5"
+            >
+              <b className="mr-2 tracking-widest text-[#9ff0ff] [text-shadow:0_0_6px_rgba(90,220,255,0.7)]" />
+              <span />
+            </div>
+            <div
               ref={shipTipRef}
               className="pointer-events-none absolute hidden whitespace-pre border border-current/40 bg-black/60 px-2 py-0.5 text-lg leading-5 [text-shadow:0_0_6px_currentColor]"
             />
@@ -2048,7 +2152,7 @@ export default function Holomap() {
         </div>
       </div>
 
-      <AboutPanel open={about} onClose={() => setAbout(false)} />
+      <AboutPanel open={about} onClose={() => setAbout(false)} think={think} onThink={setThink} />
 
       {/* Key help folds into a one-line chip so it never covers the table's coordinates; hover or focus
           unfolds it, click opens the full "How it works" panel (which lists every key too). */}
