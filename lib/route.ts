@@ -323,6 +323,21 @@ async function attempt(a: LonLat, b: LonLat, env: Env, landMask: LandMask, padF:
   };
 }
 
+// The pair whose fuel-optimal route beats its direct line by the most (saving = 1 − hours/directHours).
+// Planning every pair is slow, so the direct line's slowdown against still water screens them all
+// cheaply and only the top k get the full planner. Pairs whose direct line crosses land don't count.
+export async function bestSaving<T extends { a: LonLat; b: LonLat }>(pairs: T[], env: Env, landMask: LandMask, k = 5) {
+  const drag = (p: T) => 1 - gcMetres(p.a, p.b) / (env.knots * KN) / legSeconds(env, p.a, p.b);
+  const top = pairs.map((p) => [drag(p), p] as const).sort((x, y) => y[0] - x[0]).slice(0, k);
+  let best: { pair: T; saving: number } | null = null;
+  for (const [, p] of top) {
+    const r = await planRoute(p.a, p.b, env, landMask);
+    const saving = r?.directHours ? 1 - r.hours / r.directHours : -Infinity;
+    if (saving > (best?.saving ?? -Infinity)) best = { pair: p, saving };
+  }
+  return best;
+}
+
 // Binary min-heap of (id, key).
 function heap() {
   const k: number[] = [], v: number[] = [];

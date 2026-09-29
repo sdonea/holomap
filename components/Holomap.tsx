@@ -1,10 +1,11 @@
 "use client";
 
+import NextImage from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { fromMerc, rhumb, sample, toMerc, type Field } from "@/lib/geo";
 import { loadGrid, loadWindForecast, type Layer } from "@/lib/currents";
-import { gcAt, gcMetres, legSeconds, planRoute, windAt, type Env, type LandMask, type LonLat, type Route, type WindSeries } from "@/lib/route";
-import { matchDestination, parseAisEta } from "@/lib/ports";
+import { bestSaving, gcAt, gcMetres, legSeconds, planRoute, windAt, type Env, type LandMask, type LonLat, type Route, type WindSeries } from "@/lib/route";
+import { matchDestination, parseAisEta, PORTS, type Port } from "@/lib/ports";
 import { DEFAULT_MARKET, type Market } from "@/lib/economics";
 import RoutePanel, { type PlayState, type RouteInfo } from "./RoutePanel";
 import AboutPanel from "./AboutPanel";
@@ -86,9 +87,23 @@ const gcBearing = ([lon1, lat1]: LonLat, [lon2, lat2]: LonLat) => {
   const n = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos(dl);
   return ((Math.atan2(e, n) / r) + 360) % 360;
 };
-const DEMO: [LonLat, LonLat] = [[-74.9, 35.2], [-63.5, 43.0]]; // Cape Hatteras to south of Nova Scotia, up the Gulf Stream
-const DEMO_HINT = "Fuel-optimal route through today's Gulf Stream. Tap ROUTE to plot your own.";
+// First-visit demo: every trip between these offshore points (500 km or more), and the one where today's
+// Gulf Stream makes the optimal route beat the straight line by the most gets plotted. Usually a
+// southbound trip that swings out around the stream instead of fighting it.
+const DEMO_PTS: [string, LonLat][] = [
+  ["Miami", [-79.7, 25.8]], ["Cape Canaveral", [-79.6, 28.5]], ["Charleston", [-78.3, 31.8]], ["Cape Hatteras", [-74.9, 35.2]],
+  ["New York", [-72.0, 39.6]], ["Georges Bank", [-67.5, 40.8]], ["Nova Scotia", [-63.5, 43.0]], ["Bermuda", [-64.8, 32.1]], ["Abaco", [-76.0, 26.5]],
+];
+const DEMO_TRIPS = DEMO_PTS.flatMap(([na, a]) => DEMO_PTS.filter(([, b]) => b !== a && gcMetres(a, b) >= 500e3).map(([nb, b]) => ({ name: `${na} to ${nb}`, a, b })));
+const DEMO_FALLBACK = DEMO_TRIPS.find((t) => t.name === "Nova Scotia to Charleston")!;
 const SEEN = "holomap.seen";
+// Ports on the map, hubs first: a label only draws where it doesn't overlap one drawn before it, so
+// zoomed out you see these, and the rest of lib/ports.ts fills in as you zoom.
+const HUBS = ("SGSIN CNSHA NLRTM USLAX USNYC AEJEA HKHKG KRPUS CNNGB DEHAM BEANR EGPSD PABLB BRSSZ ZADUR LKCMB " +
+  "MYPKG USHOU TWKHH JPTYO ESALG GRPIR MATNG AUMEL INNSA SAJED OMSLL CAVAN CAHAL USSAV USMIA USSEA USORF " +
+  "DJJIB KEMBA NGAPP ARBUE CLSAI PECLL MXZLO GBFXT FRLEH ITGOA TRIST CNYTN CNTAO JPYOK").split(" ");
+const hubRank = (p: Port) => (HUBS.includes(p.code) ? HUBS.indexOf(p.code) : HUBS.length);
+const MAP_PORTS = [...PORTS].sort((a, b) => hubRank(a) - hubRank(b)).map((p) => ({ p, m: toMerc(p.lon, p.lat) }));
 const NO_PLAY: PlayState = { t: -1, playing: false, total: 0, wind: "", current: "" };
 // What the ship panel's ROUTE TO button hands the engine.
 type ShipLeg = { name: string; port: string; lon: number; lat: number; portLon: number; portLat: number; kn: number; cog: number | null; eta: number | null };
@@ -446,11 +461,49 @@ export default function Holomap() {
       sctx.shadowBlur = 0;
       sctx.lineCap = "butt";
     };
+    // Ports: a small square and name, hubs first, skipping any whose label would overlap one already
+    // drawn. While picking a route's ends they turn amber: tapping one starts/ends the route there.
+    let portMarks: { p: Port; m: [number, number]; box: [number, number, number, number] }[] = [];
+    let portsHot = false;
+    const pickingEnds = () => tool === "route" || (tool === "none" && !!bearingFrom && keys.has("e"));
+    const drawPorts = () => {
+      portMarks = [];
+      sctx.font = `13px ${pixelFont}`;
+      sctx.textAlign = "left";
+      sctx.textBaseline = "middle";
+      sctx.lineWidth = 1.5;
+      sctx.strokeStyle = sctx.fillStyle = sctx.shadowColor = portsHot ? "#ffd27a" : "#cfefff";
+      sctx.globalAlpha = portsHot ? 0.95 : 0.6;
+      const squares = new Path2D(); // stroked once at the end: one glow pass, not one per port
+      for (const { p, m } of MAP_PORTS) {
+        const [x, y] = toScreen(...m).map(Math.round);
+        if (x < -80 || y < -10 || x > W + 10 || y > H + 10) continue;
+        const box: [number, number, number, number] = [x - 5, y - 7, x + 8 + sctx.measureText(p.name).width, y + 7];
+        if (portMarks.some(({ box: b }) => box[0] < b[2] + 4 && box[2] + 4 > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
+        portMarks.push({ p, m, box });
+        squares.rect(x - 2.5, y - 2.5, 5, 5);
+        sctx.fillText(p.name, x + 7, y + 1);
+      }
+      sctx.shadowBlur = portsHot ? 6 : 0;
+      sctx.stroke(squares);
+      sctx.globalAlpha = 1;
+      sctx.shadowBlur = 0;
+    };
+    // The drawn port under a tap (its square or its name), with a little slack for fingers.
+    const portAt = (sx: number, sy: number) =>
+      portMarks.find(({ box: b }) => sx >= b[0] - 8 && sx <= b[2] + 4 && sy >= b[1] - 8 && sy <= b[3] + 8);
+    // Ports go under the ships, except while picking route ends: then ships can't be clicked and
+    // ports on top keep busy harbours (all blips) tappable.
     const drawShips = () => {
       sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       sctx.clearRect(0, 0, W, H);
       marks = [];
-      if (!shipsOn) return;
+      portsHot = pickingEnds();
+      if (!portsHot) drawPorts();
+      if (shipsOn) drawShipMarks();
+      if (portsHot) drawPorts();
+    };
+    const drawShipMarks = () => {
       const sel = selMmsi == null ? undefined : ships.find((sh) => sh.mmsi === selMmsi);
       if (sel) drawTrack(sel); // under the ship markers
       const ox = view.cx * view.scale - W / 2, oy = view.cy * view.scale - H / 2; // screen px -> map-pinned px
@@ -492,95 +545,97 @@ export default function Holomap() {
         marks.push({ x, y, r, ships: c.ships, kinds });
       }
 
-      sctx.lineWidth = 1.5;
+      // Glow (shadowBlur) is one GPU blur pass per draw call, so glowing shapes are gathered into one path
+      // per colour and drawn once: ~6 passes a frame instead of one per ship (the difference while panning
+      // was 41% vs 18% GPU at 2x). Unlit parts (keylines, tints, labels) draw as they go.
+      const lit = new Map<string, { line: Path2D; fill: Path2D; lead: Path2D; dot: Path2D }>();
+      const litOf = (col: string) =>
+        lit.get(col) ?? lit.set(col, { line: new Path2D(), fill: new Path2D(), lead: new Path2D(), dot: new Path2D() }).get(col)!;
+      sctx.shadowBlur = 0;
       sctx.textBaseline = "middle";
       sctx.font = `14px ${pixelFont}`;
+      sctx.textAlign = "left";
       for (const m of marks) {
         if (m.ships.length === 1) continue;
         const { x, y, r } = m, n = m.ships.length, color = m.kinds[0][0].color;
-        sctx.shadowBlur = 0;
         sctx.beginPath();
         sctx.arc(x, y, r, 0, 2 * Math.PI);
         sctx.strokeStyle = "rgba(3,14,24,0.8)"; // dark keyline so blips separate from the glowing coast
         sctx.lineWidth = 4.5;
         sctx.stroke();
-        sctx.lineWidth = 1.5;
         sctx.globalAlpha = 0.14;
         sctx.fillStyle = color;
         sctx.fill();
-        sctx.globalAlpha = 1;
-        sctx.shadowBlur = 6;
         let a = -Math.PI / 2; // ring split into arcs by type share, clockwise from north
         const gap = m.kinds.length > 1 ? 0.35 : 0;
         for (const [kd, cnt] of m.kinds) {
-          const da = (2 * Math.PI * cnt) / n;
-          sctx.strokeStyle = sctx.shadowColor = kd.color;
-          sctx.beginPath();
-          sctx.arc(x, y, r, a + gap / 2, a + Math.max(gap / 2 + 0.05, da - gap / 2));
-          sctx.stroke();
+          const da = (2 * Math.PI * cnt) / n, arc = litOf(kd.color).line;
+          arc.moveTo(x + r * Math.cos(a + gap / 2), y + r * Math.sin(a + gap / 2));
+          arc.arc(x, y, r, a + gap / 2, a + Math.max(gap / 2 + 0.05, da - gap / 2));
           a += da;
         }
-        sctx.fillStyle = sctx.shadowColor = color;
-        sctx.fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
-        sctx.shadowBlur = 0;
+        litOf(color).dot.rect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
         const label = n > 999 ? "999+" : String(n);
-        sctx.textAlign = "left";
         sctx.strokeStyle = "rgba(3,14,24,0.85)";
         sctx.lineWidth = 3;
+        sctx.globalAlpha = 1;
         sctx.strokeText(label, x + r + 4, y + 1);
-        sctx.lineWidth = 1.5;
         sctx.globalAlpha = 0.9;
         sctx.fillText(label, x + r + 4, y + 1);
         sctx.globalAlpha = 1;
       }
 
       const singles = marks.filter((m) => m.ships.length === 1);
-      const labels = singles.length <= 50;
-      const placed: [number, number, number, number][] = []; // label boxes already drawn, to skip collisions
-      sctx.shadowBlur = 0;
       sctx.lineWidth = 1;
       sctx.strokeStyle = "rgba(160,235,255,0.35)";
       sctx.beginPath();
       for (const m of singles) if (m.from) { sctx.moveTo(m.from[0], m.from[1]); sctx.lineTo(m.x, m.y); }
       sctx.stroke();
-      sctx.lineWidth = 1.5;
-      sctx.font = `15px ${pixelFont}`;
-      sctx.textAlign = "center";
-      for (const { x: fx, y: fy, ships: [sh], from } of singles) {
-        const x = Math.round(fx), y = Math.round(fy), color = shipKind(sh.type).color;
-        sctx.strokeStyle = sctx.fillStyle = sctx.shadowColor = color;
-        sctx.shadowBlur = 8;
-        sctx.beginPath();
+      for (const { x: fx, y: fy, ships: [sh] } of singles) {
+        const x = Math.round(fx), y = Math.round(fy), g = litOf(shipKind(sh.type).color);
         if (sh.cog == null || sh.sog < 0.5) { // stopped / anchored: hollow diamond with a centre pip
-          sctx.moveTo(x, y - 6); sctx.lineTo(x + 6, y); sctx.lineTo(x, y + 6); sctx.lineTo(x - 6, y); sctx.closePath();
-          sctx.stroke();
-          sctx.fillRect(x - 1, y - 1, 2, 2);
+          g.line.moveTo(x, y - 6); g.line.lineTo(x + 6, y); g.line.lineTo(x, y + 6); g.line.lineTo(x - 6, y); g.line.closePath();
+          g.dot.rect(x - 1, y - 1, 2, 2);
         } else { // moving: holo arrow along course, leader line length = speed
-          const a = (sh.cog * Math.PI) / 180; // 0 = north, clockwise
-          sctx.setTransform(dpr, 0, 0, dpr, x * dpr, y * dpr);
-          sctx.rotate(a);
-          sctx.moveTo(0, -9); sctx.lineTo(6.5, 7); sctx.lineTo(0, 3); sctx.lineTo(-6.5, 7); sctx.closePath();
-          sctx.globalAlpha = 0.3;
-          sctx.fill();
-          sctx.globalAlpha = 1;
-          sctx.stroke();
-          sctx.beginPath();
-          sctx.moveTo(0, -12);
-          sctx.lineTo(0, -12 - Math.min(40, 4 + sh.sog * 2));
-          sctx.globalAlpha = 0.6;
-          sctx.stroke();
-          sctx.globalAlpha = 1;
-          sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          const a = (sh.cog * Math.PI) / 180, cs = Math.cos(a), sn = Math.sin(a); // 0 = north, clockwise
+          const at = (px: number, py: number): [number, number] => [x + px * cs - py * sn, y + px * sn + py * cs];
+          for (const path of [g.line, g.fill]) {
+            path.moveTo(...at(0, -9)); path.lineTo(...at(6.5, 7)); path.lineTo(...at(0, 3)); path.lineTo(...at(-6.5, 7)); path.closePath();
+          }
+          g.lead.moveTo(...at(0, -12));
+          g.lead.lineTo(...at(0, -12 - Math.min(40, 4 + sh.sog * 2)));
         }
-        const lw = sh.name ? sctx.measureText(sh.name).width / 2 + 3 : 0;
-        const box: [number, number, number, number] = [x - lw, y + 12, x + lw, y + 26];
-        if (labels && sh.name && !from && !placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) {
+      }
+      sctx.lineWidth = 1.5;
+      for (const [col, g] of lit) {
+        sctx.strokeStyle = sctx.fillStyle = sctx.shadowColor = col;
+        sctx.shadowBlur = 8;
+        sctx.globalAlpha = 0.3;
+        sctx.fill(g.fill);
+        sctx.globalAlpha = 0.6;
+        sctx.stroke(g.lead);
+        sctx.globalAlpha = 1;
+        sctx.stroke(g.line);
+        sctx.fill(g.dot);
+      }
+      sctx.shadowBlur = 0;
+
+      // Names under single ships, skipping any that would overlap one already drawn.
+      if (singles.length <= 50) {
+        const placed: [number, number, number, number][] = [];
+        sctx.font = `15px ${pixelFont}`;
+        sctx.textAlign = "center";
+        sctx.globalAlpha = 0.75;
+        for (const { x: fx, y: fy, ships: [sh], from } of singles) {
+          if (!sh.name || from) continue;
+          const x = Math.round(fx), y = Math.round(fy), lw = sctx.measureText(sh.name).width / 2 + 3;
+          const box: [number, number, number, number] = [x - lw, y + 12, x + lw, y + 26];
+          if (placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
           placed.push(box);
-          sctx.shadowBlur = 0;
-          sctx.globalAlpha = 0.75;
+          sctx.fillStyle = shipKind(sh.type).color;
           sctx.fillText(sh.name, x, y + 19);
-          sctx.globalAlpha = 1;
         }
+        sctx.globalAlpha = 1;
       }
       // Selected ship: corner brackets on its true position (even when it's inside a blip)
       if (sel) {
@@ -967,7 +1022,7 @@ export default function Holomap() {
     const updateShipTip = (sx: number, sy: number, active: boolean) => {
       const m = active && shipsOn ? markAt(sx, sy) : undefined;
       const tip = shipTipRef.current!;
-      surface.style.cursor = m ? "pointer" : "";
+      surface.style.cursor = m || (portsHot && sx >= 0 && portAt(sx, sy)) ? "pointer" : "";
       if (!m) {
         if (hoverKey) { tip.style.display = "none"; hoverKey = ""; }
         return;
@@ -1338,6 +1393,7 @@ export default function Holomap() {
       stepFly(t);
       stepPlay(dt);
       if (!paused) stepFlow(dt);
+      if (portsHot !== pickingEnds()) shipsDirty = true;
       if (shipsDirty && W) { drawShips(); shipsDirty = false; }
       if (W && (bearingFrom || route || toolDrawn)) drawBearing();
       if (W) {
@@ -1388,7 +1444,7 @@ export default function Holomap() {
       bearingFrom = bearingTo = null;
       setToolUi(t);
       demoHint = false;
-      setHint(t === "route" ? "TAP START" : t === "bearing" ? "DRAG TO MEASURE" : "");
+      setHint(t === "route" ? "TAP START · A PORT OR ANY SEA POINT" : t === "bearing" ? "DRAG TO MEASURE" : "");
     };
     const clearAll = () => {
       setTool("none");
@@ -1457,11 +1513,12 @@ export default function Holomap() {
     const hr = nums("r", 4);
     let seen = true;
     try { seen = !!localStorage.getItem(SEEN); localStorage.setItem(SEEN, "1"); } catch { /* storage blocked: no demo */ }
-    const pending: [LonLat, LonLat] | null = hr ? [[hr[0], hr[1]], [hr[2], hr[3]]] : !seen && !location.hash ? DEMO : null;
-    if (pending === DEMO) { // frame the whole demo route, left of the route panel on wide screens
+    const pending: [LonLat, LonLat] | null = hr ? [[hr[0], hr[1]], [hr[2], hr[3]]] : null;
+    const demo = !hr && !seen && !location.hash;
+    if (demo) { // frame all the demo points while they're compared; the winner then gets a fly-to
       const wide = window.innerWidth > 700;
-      [view.cx, view.cy] = toMerc(wide ? -65 : -69.2, wide ? 39.3 : 39.1);
-      startKm = wide ? 3000 : 1500;
+      [view.cx, view.cy] = toMerc(wide ? -67 : -71.5, 34.5);
+      startKm = wide ? 4200 : 2400;
     }
     if (window.innerWidth < 700) setTilt(false); // tilted wastes a phone screen
 
@@ -1476,14 +1533,25 @@ export default function Holomap() {
           .sort((a, b) => b[0] - a[0]);
         depthFill = new Map(Object.entries(g.fill).map(([d, rings]) => [Number(d), rings.map(decode)]));
         dirty = true;
-        if (!pending) return; // the planner needs the land loaded
-        plotRoute(toMerc(...pending[0]), toMerc(...pending[1]));
-        if (pending === DEMO) {
-          demoHint = true;
-          setHint(DEMO_HINT);
-        }
+        // the planner needs the land loaded
+        if (pending) plotRoute(toMerc(...pending[0]), toMerc(...pending[1]));
+        if (demo) pickDemo();
       })
       .catch((e) => console.error("geo load failed", e));
+
+    // Compare every demo trip on today's currents and plot the one where the optimal route saves most.
+    const pickDemo = async () => {
+      demoHint = true;
+      setHint(`Comparing ${DEMO_TRIPS.length} Gulf Stream trips…`);
+      const job = routeJob, sig = new AbortController().signal;
+      const [current, now] = await Promise.all([loadGrid("ocean", sig).catch(() => null), loadGrid("wind", sig).catch(() => null)]);
+      const env: Env = { current, wind: now && { start: 0, step: 3600, fields: [now] }, knots };
+      const best = current ? await bestSaving(DEMO_TRIPS, env, routeLand).catch(() => null) : null;
+      if (job !== routeJob || !demoHint) return; // they started using the map meanwhile: leave it to them
+      const trip = best && best.saving > 0 ? best.pair : DEMO_FALLBACK;
+      plotRoute(toMerc(...trip.a), toMerc(...trip.b), undefined, true);
+      setHint(`${trip.name}: the biggest fuel saving of ${DEMO_TRIPS.length} trips on today's Gulf Stream. Tap ROUTE to plot your own.`);
+    };
 
     // offsetX/Y are in the surface's own (untransformed) coordinates, so this stays correct when tilted.
     // Two pointers pinch-zoom and pan together; one pointer drags (or measures, with the BEARING tool).
@@ -1542,18 +1610,19 @@ export default function Holomap() {
       cursor.ly = e.offsetY;
     };
     const click = (x: number, y: number) => {
+      const port = portsHot ? portAt(x, y) : undefined, at = port ? port.m : toMercAt(x, y); // a tapped port snaps the end onto it
       if (tool === "route") { // tap the start, then the destination
         if (!bearingFrom) {
-          bearingFrom = toMercAt(x, y);
-          setHint("TAP DESTINATION");
+          bearingFrom = at;
+          setHint(port ? `FROM ${port.p.name} · TAP DESTINATION` : "TAP DESTINATION");
         } else {
-          plotRoute(bearingFrom, toMercAt(x, y));
+          plotRoute(bearingFrom, at);
           setTool("none");
         }
         return;
       }
       if (tool === "bearing") { bearingFrom = bearingTo = null; return; } // a tap clears the measurement
-      if (bearingFrom) return plotRoute(bearingFrom, toMercAt(x, y)); // E held: click = destination
+      if (bearingFrom) return plotRoute(bearingFrom, at); // E held: click = destination
       const m = markAt(x, y);
       if (m && m.ships.length > 1) {
         // centre on it and zoom until its ships spread past a cell (clampView stops at max zoom,
@@ -1729,6 +1798,13 @@ export default function Holomap() {
       className="fixed inset-0 flex items-center justify-center overflow-hidden bg-[radial-gradient(ellipse_at_50%_15%,#1a2633_0%,#070a0f_65%)] font-[family-name:var(--font-pixel)]"
       style={{ perspective: "1800px" }}
     >
+      {/* Sign above the tilted table; it lifts away as the view flattens (the table fills the screen then). */}
+      <h1
+        className={`pointer-events-none absolute left-1/2 top-[3.5vh] flex -translate-x-1/2 select-none items-center gap-3 text-5xl leading-none tracking-[0.2em] transition-[opacity,transform] duration-[900ms] ease-[cubic-bezier(0.65,0,0.35,1)] motion-reduce:transition-none ${glow} ${tilt ? "opacity-100" : "-translate-y-8 opacity-0"}`}
+      >
+        <NextImage src="/icon.svg" alt="" width={36} height={36} unoptimized className="drop-shadow-[0_0_6px_rgba(90,220,255,0.45)]" />
+        HOLOMAP
+      </h1>
       {/* One table, one layout. Flat is the same table pitched level and scaled to fill the screen, so the move
           reads as dipping your head over it; the bezel hangs outside the map box and slides off-screen. */}
       <div

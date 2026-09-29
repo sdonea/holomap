@@ -9,9 +9,20 @@ rings; blue lines offshore are real depth contours (200 m, 1000 m … 4000 m). T
 pixel streaks are the live surface current: each streak moves the way the water is going,
 and brighter/longer means faster.
 
+## Sign above the table
+In the tilted view a sign floats above the table: the COURSE pixel mark (the tab icon, `app/icon.svg`) and
+"HOLOMAP" in the same glowing pixel font. It stays upright (it isn't part of the tilted table) and lifts away
+and fades when you flatten the view (**T**), since the table fills the screen then. Phones start flat, so they
+don't see it. It's the `<h1>` at the top of the page in `components/Holomap.tsx`.
+
 ## First visit
-With no link, the table opens on a demo: it plots a fuel-optimal route from Cape Hatteras to south of Nova
-Scotia through today's Gulf Stream, opens the route panel, and shows one hint ("Tap ROUTE to plot your own").
+With no link, the table opens on a demo. It compares 58 trips between nine offshore points (Miami, Cape
+Canaveral, Charleston, Cape Hatteras, New York, Georges Bank, Nova Scotia, Bermuda, Abaco) on today's
+currents, plots the one where the best route saves the most fuel against the straight line, flies to it and
+opens the route panel. The hint names the trip ("Nova Scotia to Charleston: the biggest fuel saving of 58
+trips…"). It's usually a southbound trip that slips around the Gulf Stream instead of fighting it; on
+2026-09-28 it was 7.7% (the old fixed Hatteras → Nova Scotia demo showed 0.6%). The points are `DEMO_PTS` in
+`components/Holomap.tsx`. Touching the map while it compares cancels the demo.
 The hint goes away at the first touch, click or key. A returning visitor doesn't get the demo again (the
 browser remembers `holomap.seen`).
 
@@ -19,6 +30,8 @@ browser remembers `holomap.seen`).
 - **BEARING** — press and drag to measure (on a phone, dragging measures instead of panning). The measurement
   stays pinned until you tap again, pick another tool, or press **Esc**. Key: **B**.
 - **ROUTE** — tap the start, then the destination (the hint above the toolbar says which). Key: **R**.
+  While you pick, the ports turn amber and sit above the ships: tap a port (its square or its name) and the
+  route starts or ends exactly there ("FROM NEW YORK · TAP DESTINATION"). Tapping open sea still works.
 - **CLEAR** — removes the route and any measurement.
 - **SHARE** — copies a link to exactly this view, layer, speed and route ("LINK COPIED"). The address bar
   always holds the same link, so copying it works too: `#v=lon,lat,widthKm&l=wind&kn=10&r=lon1,lat1,lon2,lat2`.
@@ -38,6 +51,12 @@ Opens by itself when a route is plotted on a wide screen; on a phone, tap the am
   streaks near the route show the forecast wind for that moment, so you watch the weather move past. Drag
   the slider to scrub.
 - The amber label on the map is now two lines (speed, distance and time); it hides while the panel is open.
+
+## Ports
+The ~160 ports in `lib/ports.ts` are drawn as small squares with their names. Big hubs go first (the `HUBS`
+list in `components/Holomap.tsx`, Singapore, Shanghai, Rotterdam…), and a name only appears where it doesn't
+overlap one already drawn, so zoomed out you see the hubs and the rest fill in as you zoom. To show a port
+sooner, move its code earlier in `HUBS`; to add a port, add a line to the table in `lib/ports.ts`.
 
 ## Real ships vs the optimal route
 Click a ship. If its broadcast destination is a port the map knows (~160 major ports, `lib/ports.ts`), the
@@ -129,6 +148,10 @@ The map reads in layers, lit from the upper left:
   - **Click a ship** to open its info panel on the right of the table: type, name, MMSI, status (under way / anchored / moored…), speed, course, heading, destination, ETA, size, draught, call sign, IMO, position and how long ago it last reported, plus a MarineTraffic link. The ship gets corner brackets on the map and its **past course** is drawn behind it: an X at each position it reported over the last 6 hours, joined by straight lines, ending at the ship. The server keeps at most one report per 30 s per ship (one per 10 min while it sits still), and when zoomed out, Xs that would overlap are skipped (the line still passes through them). Tracks are recorded by the server while it runs, so right after a restart they start short and grow. It refreshes every 3 s. Close with ×, **Esc**, or by clicking empty map. Size, destination and call sign come from a separate AIS message each ship sends every ~6 min, so they show "--" until it arrives. Small boats (pleasure craft, small fishing boats) carry cheaper "Class B" transponders that never send status, destination, ETA, draught or IMO, so their panel says SMALL CRAFT (AIS CLASS B) and leaves those rows out.
 
 ## Recent changes
+- 2026-09-28: Added the HOLOMAP sign (pixel logo + name) above the tilted table; it fades away in the flat view.
+- 2026-09-28: Smoother panning and zooming: the glow on ships, ship clusters and ports is now drawn once per colour instead of once per marker. On a Retina M2 screen this cut the graphics chip's load while panning from 41% to 22%, and the map looks the same.
+- 2026-09-28: Ports on the map (hubs first, more as you zoom), tappable in ROUTE mode to start or end a route exactly at a port.
+- 2026-09-28: The first-visit demo now compares 58 Gulf Stream trips and shows the one with the biggest fuel saving today.
 - 2026-09-28: The keyboard help in the bottom-left corner is now a small "? keys" chip (hover to see the list, click for the full How-it-works panel), so it no longer covers the coordinates.
 - 2026-09-28: New tab icon (the COURSE pixel mark) and iPhone home-screen icon.
 - 2026-09-28: ROUTE TO a ship's destination now zooms out to show the whole route.

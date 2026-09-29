@@ -1,7 +1,7 @@
 // Run: node lib/route.check.ts   — fails loudly if the fuel-optimal route planner breaks.
 import assert from "node:assert/strict";
 import { fromMerc, rhumb, type Field } from "./geo.ts";
-import { gcAt, gcMetres, planRoute, WIND_GAIN, WIND_LOSS, type LandMask, type LonLat, type WindSeries } from "./route.ts";
+import { bestSaving, gcAt, gcMetres, planRoute, WIND_GAIN, WIND_LOSS, type LandMask, type LonLat, type WindSeries } from "./route.ts";
 
 const V = 12 * 0.514444; // 12 kn in m/s
 const close = (a: number, b: number, rel = 0.01) => assert.ok(Math.abs(a - b) <= rel * Math.abs(b), `${a} != ${b}`);
@@ -118,6 +118,16 @@ assert.equal(await planRoute([0, 0], [10, 0], env(field(() => [0, 10])), sea), n
   const r = (await planRoute([142, 35], [-125, 37], env(), sea))!;
   close(r.km, gcMetres([142, 35], [-125, 37]) / 1000, 1e-9);
   assert.ok(gcAt([142, 35], [-125, 37], 0.5)[1] > 45, "transpacific great circle arcs far north");
+}
+
+// Demo picker: a 1.5 m/s eastward jet at 0-2° N. Westbound along the jet is the trip with room to save
+// (dodge the jet); eastbound rides it (direct is already best) and a still-water trip can't improve.
+{
+  const jet = field((_, lat) => [lat >= 0 && lat <= 2 ? 1.5 : 0, 0]);
+  const pairs = [{ n: "east", a: [0, 1], b: [10, 1] }, { n: "west", a: [10, 1], b: [0, 1] }, { n: "still", a: [0, 20], b: [10, 20] }] as { n: string; a: LonLat; b: LonLat }[];
+  const best = (await bestSaving(pairs, env(jet), sea, 2))!;
+  assert.equal(best.pair.n, "west");
+  assert.ok(best.saving > 0.05, `dodging the jet saves ${best.saving}`);
 }
 
 console.log("route checks ok");
