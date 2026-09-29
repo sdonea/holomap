@@ -1,8 +1,28 @@
+<div align="center">
+
+<img src="app/icon.svg" width="72" alt="" />
+
 # Holomap
 
-A live map of the real ocean, drawn like the holotable in Carrier Command 2, with a fuel-optimal route
-planner. Pick two points and it plots the route a ship should sail to burn the least fuel through today's
-ocean currents and the wind forecast, around land and through the canals.
+**The real ocean on a Carrier Command 2 style holotable, with a planner that finds the route a ship
+should sail to burn the least fuel through today's currents and wind.**
+
+[![Daily route](https://github.com/sdonea/holomap/actions/workflows/daily-route.yml/badge.svg)](https://github.com/sdonea/holomap/actions/workflows/daily-route.yml)
+![Next.js 16](https://img.shields.io/badge/Next.js-16-000?logo=nextdotjs&logoColor=white)
+![React 19](https://img.shields.io/badge/React-19-149eca?logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
+![Data: NOAA](https://img.shields.io/badge/data-NOAA%20%C2%B7%20AIS%20%C2%B7%20Natural%20Earth-0f3257)
+
+[Features](#features) · [How the planner works](#how-the-planner-works) · [Under the hood](#under-the-hood) · [Run it](#run-it)
+
+<img src="docs/holomap.gif" width="100%" alt="Holomap: live ocean currents drift across a glowing holotable, a fuel-optimal route is plotted through the Gulf Stream, and the view pulls back to the whole world" />
+
+</div>
+
+A straight line is the shortest way across the sea, but rarely the cheapest. The Gulf Stream runs at up to
+2 m/s, which is a third of a 12-knot ship's speed: ride it and you're pushed along for free, fight it and every
+mile takes half again as long. Holomap pulls today's surface currents, the 16-day wind forecast and live ship positions,
+draws them on a glowing tactical table, and plans the route that spends the least time (and so fuel) at sea.
 
 <!-- daily-route:start -->
 ### Today's best Gulf Stream trip · 2026-09-29
@@ -16,20 +36,17 @@ trips between nine points off the US East Coast on that day's currents, and the 
 Every day's pick is logged in <a href="docs/daily-routes.csv">docs/daily-routes.csv</a>.</sub>
 <!-- daily-route:end -->
 
-## What it does
+## Features
 
-- **Live ocean.** Drifting streaks are today's surface current (or the 10 m wind): each moves the way the water
-  goes, brighter is faster. Blips are live ships from AIS, coloured by type. Land is real terrain; the sea
-  steps darker with depth.
-- **Fuel-optimal routes.** Tap a start and a destination, or tap two ports. The route panel shows distance,
-  time, arrival, fuel, CO₂ and cost, with a cost-by-speed chart showing why ships slow down when fuel is dear.
-- **Watch it think.** Turn it on in the ? panel and each route is preceded by a captioned replay of the
-  search: rings of equal sailing time (isochrones, the classic weather-routing picture) spread from the start,
-  stretching where the current helps and squeezing where it fights; when the wave reaches the destination the
-  fastest chain of cells is traced back, then pulled tight into the final straight legs.
-- **Real ships vs the optimum.** Click a ship headed for a known port and compare its heading and reported
-  ETA with the optimal route from where it is now.
-- **Voyage playback** with the forecast wind moving past, and **share links** that restore the exact view and route.
+| | |
+|---|---|
+| **Live ocean** | Drifting streaks are today's surface current, or the 10 m wind: each moves the way the water goes, brighter is faster. Land is real terrain; the sea steps darker with depth. |
+| **Fuel-optimal routes** | Tap a start and a destination (or two of ~160 labelled ports). The route panel shows distance, time, arrival, fuel, CO₂ and cost, plus a cost-by-speed chart that shows why ships slow down when fuel is dear. |
+| **Watch it think** | An opt-in, captioned replay of the search: rings of equal sailing time (isochrones, the classic weather-routing picture) spread from the start, stretching where the current helps and squeezing where it fights; the fastest path is traced back and pulled tight. |
+| **Real ships vs the optimum** | Click a live ship headed for a known port and compare its heading and reported ETA with the optimal route from where it is now. |
+| **Voyage playback** | Sail the route day by day with the forecast wind moving past. |
+| **Share links** | The address bar always holds the exact view, layer, speed and route. |
+| **A README that updates itself** | A daily GitHub Action finds the day's best Gulf Stream trip (above) and logs it to [`docs/daily-routes.csv`](docs/daily-routes.csv). |
 
 ## How the planner works
 
@@ -43,13 +60,27 @@ Every day's pick is logged in <a href="docs/daily-routes.csv">docs/daily-routes.
 4. **Land and water.** Natural Earth coastlines, water shallower than 15 m is off limits, and the Panama, Suez
    and Kiel canals and narrow straits are carved back in so a coarse grid can't close them.
 
-The core is `lib/route.ts`, with runnable checks in `lib/route.check.ts` (straight lines in still water,
-wind and current physics, canals, the date line, the search replay and the demo picker).
+## Under the hood
 
-## Data (all free and public)
+- **No map library.** Coastlines, terrain, depth terraces, current streaks and ships are drawn by hand on four
+  stacked canvases, tilted with a CSS 3D transform. Ship and port glows are batched into one draw per colour,
+  which halved GPU load while panning on a Retina screen.
+- **Its own GRIB2 decoder** (`lib/grib2.ts`) byte-ranges just the 10 m wind fields (~2 MB) out of NOAA's 500 MB
+  GFS files on AWS, and the currents come from CoastWatch's ERDDAP as raw binary.
+- **Plain-assert checks, no test framework.** `lib/*.check.ts` pin the physics (still water, wind, cross-current,
+  canals, the date line), the port matcher, the search replay and the demo picker.
 
-[NOAA CoastWatch](https://coastwatch.noaa.gov/erddap/griddap/noaacwBLENDEDNRTcurrentsDaily.html) surface currents
-(daily) · [NOAA GFS](https://registry.opendata.aws/noaa-gfs-bdp-pds/) wind and 16-day forecast ·
+| Path | What's there |
+|---|---|
+| `lib/route.ts` | The planner: fuel model, A*, pull-tight, canals, the demo picker |
+| `components/Holomap.tsx` | The table: drawing, input, route plotting, playback |
+| `app/api/{currents,wind,ships}` | Data proxies: CoastWatch, GFS, aisstream.io |
+| `scripts/daily-route.mjs` + `.github/workflows/daily-route.yml` | The self-updating README |
+
+## Data
+
+All free and public: [NOAA CoastWatch](https://coastwatch.noaa.gov/erddap/griddap/noaacwBLENDEDNRTcurrentsDaily.html)
+surface currents (daily) · [NOAA GFS](https://registry.opendata.aws/noaa-gfs-bdp-pds/) wind and 16-day forecast ·
 [aisstream.io](https://aisstream.io) live ships · [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
 land height and sea depth · [Natural Earth](https://www.naturalearthdata.com) coastlines and depth contours.
 
@@ -67,4 +98,6 @@ Checks (Node 22.18+): `npm run typecheck`, `node lib/route.check.ts`, `node lib/
 `node lib/geo.check.ts`; with the dev server up, `node lib/currents.check.ts` and `node lib/wind.check.ts`
 (pass the server's URL if it isn't `http://localhost:3000`).
 
-Built by Sebastian "Seth" Donea.
+---
+
+<div align="center">Built by Sebastian "Seth" Donea</div>
