@@ -677,7 +677,8 @@ export default function Holomap() {
     let knots = SHIP_KN_START;
     const blankInfo = (status: RouteInfo["status"], kn: number): RouteInfo =>
       ({ status, knots: kn, nm: 0, hours: 0, delayHours: 0, legs: 0, depart: Date.now(), via: [], directHours: null, note: "", bySpeed: [] });
-    const plotRoute = async (from: [number, number], to: [number, number], ship?: ShipLeg) => {
+    // fit: once the first version is drawn, fly out to show the whole route (used for a ship's ROUTE TO)
+    const plotRoute = async (from: [number, number], to: [number, number], ship?: ShipLeg, fit = false) => {
       const job = ++routeJob, kn = knots;
       const empty = (text: string): Plot => ({ from, to, line: [], joints: [], text: [text], times: [], wind: null, current: null, ship });
       setRoute(empty("PLOTTING ROUTE…"));
@@ -699,6 +700,7 @@ export default function Holomap() {
         return;
       }
       show(from, to, first, env0, "refining", "REFINING WITH WIND FORECAST…", ship);
+      if (fit && route) flyToFit(route.line);
       const lons = first.pts.map((p) => p[0]), lats = first.pts.map((p) => p[1]);
       let [w, e] = [Math.min(...lons) - 10, Math.max(...lons) + 10];
       if (e - w > 180) [w, e] = [-180, 180]; // probably across the date line: take the full width
@@ -751,6 +753,35 @@ export default function Holomap() {
         via: r.via, directHours: r.directHours, note, bySpeed,
         ship: ship && { name: ship.name, port: ship.port, headingDiff: hd, reportedEta: ship.eta },
       });
+    };
+    // Smooth camera move to frame a line (merc, x unwrapped), clear of the route panel, top bar and toolbar.
+    // Steps through panBy/zoomAt each frame so the streaks and ships travel with the map.
+    let fly: { t0: number; cx: number; cy: number; ls: number; tx: number; ty: number; tls: number } | null = null;
+    const flyToFit = (line: [number, number][]) => {
+      if (!line.length || !W) return;
+      const xs = line.map((p) => p[0]), ys = line.map((p) => p[1]);
+      const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      const right = routePanelOpen.current && window.innerWidth > 700 ? 330 : 0, top = 100, bottom = 130, side = 80;
+      const scale = Math.min((W - right - 2 * side) / Math.max(x1 - x0, 1e-9), (H - top - bottom) / Math.max(y1 - y0, 1e-9));
+      const tls = Math.log(Math.min(maxScale(), Math.max(W, H, scale)));
+      const k = Math.exp(tls);
+      // centre the box in the free area: shift the view centre right by half the panel, down by the bar difference
+      const tx = (x0 + x1) / 2 + right / 2 / k, ty = (y0 + y1) / 2 + (bottom - top) / 2 / k;
+      const target = { cx: view.cx + near(tx - view.cx), cy: ty };
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        zoomAt(W / 2, H / 2, k / view.scale);
+        panBy((view.cx - target.cx) * view.scale, (view.cy - target.cy) * view.scale);
+        return;
+      }
+      fly = { t0: performance.now(), cx: view.cx, cy: view.cy, ls: Math.log(view.scale), tx: target.cx, ty: target.cy, tls };
+    };
+    const stepFly = (now: number) => {
+      if (!fly) return;
+      const f = Math.min(1, (now - fly.t0) / 900), e = f < 0.5 ? 4 * f ** 3 : 1 - (-2 * f + 2) ** 3 / 2; // ease in-out
+      const cx = fly.cx + (fly.tx - fly.cx) * e, cy = fly.cy + (fly.ty - fly.cy) * e;
+      zoomAt(W / 2, H / 2, Math.exp(fly.ls + (fly.tls - fly.ls) * e) / view.scale);
+      panBy(near(view.cx - cx) * view.scale, (view.cy - cy) * view.scale);
+      if (f >= 1) fly = null;
     };
     setKnotsRef.current = (k) => {
       knots = k;
@@ -1304,6 +1335,7 @@ export default function Holomap() {
         dirty = true;
       }
       if (dirty && W) { drawBase(); dirty = false; }
+      stepFly(t);
       stepPlay(dt);
       if (!paused) stepFlow(dt);
       if (shipsDirty && W) { drawShips(); shipsDirty = false; }
@@ -1397,7 +1429,7 @@ export default function Holomap() {
       routeShip: (s) => {
         knots = s.kn;
         setSpeed(s.kn);
-        plotRoute(toMerc(s.lon, s.lat), toMerc(s.portLon, s.portLat), s);
+        plotRoute(toMerc(s.lon, s.lat), toMerc(s.portLon, s.portLat), s, true);
       },
       closeRoute: () => setPanel((p) => (p === "route" ? null : p)),
     };
@@ -1468,6 +1500,7 @@ export default function Holomap() {
       // a button swallows its click in WebKit, so bail out here.
       dismissHint(); // any touch counts as the first interaction, UI included
       if ((e.target as Element).closest("button, a, [data-ui]")) return;
+      fly = null; // grabbing the map stops a camera move
       pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
       try {
         surface.setPointerCapture(e.pointerId);
@@ -1561,6 +1594,7 @@ export default function Holomap() {
       if ((e.target as Element).closest("[data-ui]")) return; // let the ship panel scroll
       e.preventDefault();
       dismissHint();
+      fly = null;
       zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.2 : 0.006))); // ~1.8x per wheel notch (line-mode wheels send ~3/notch)
     };
     const onKey = (e: KeyboardEvent) => {

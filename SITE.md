@@ -43,7 +43,9 @@ Opens by itself when a route is plotted on a wide screen; on a phone, tap the am
 Click a ship. If its broadcast destination is a port the map knows (~160 major ports, `lib/ports.ts`), the
 panel shows **ROUTE TO <PORT>**: it plots the optimal route from where the ship is now, at the ship's own
 speed, and compares its **heading** with the route's first leg ("ON THE OPTIMAL HEADING" within 10°) and
-its **reported ETA** with the optimal one. AIS doesn't say how much fuel a ship burns, so there's no fuel
+its **reported ETA** with the optimal one. Once the route first appears, the map flies out (about a second) to show the
+whole route, from the ship to the port, clear of the route panel and toolbar; grabbing or scrolling the map
+stops the move. Margins are `top` / `bottom` / `side` in `flyToFit` in `components/Holomap.tsx`. AIS doesn't say how much fuel a ship burns, so there's no fuel
 comparison. Unknown destinations say "DESTINATION NOT RECOGNISED". Changing the speed afterwards drops the
 comparison (it's only fair at the ship's own speed).
 
@@ -121,6 +123,7 @@ The map reads in layers, lit from the upper left:
   - **Click a ship** to open its info panel on the right of the table: type, name, MMSI, status (under way / anchored / moored…), speed, course, heading, destination, ETA, size, draught, call sign, IMO, position and how long ago it last reported, plus a MarineTraffic link. The ship gets corner brackets on the map and its **past course** is drawn behind it: an X at each position it reported over the last 6 hours, joined by straight lines, ending at the ship. The server keeps at most one report per 30 s per ship (one per 10 min while it sits still), and when zoomed out, Xs that would overlap are skipped (the line still passes through them). Tracks are recorded by the server while it runs, so right after a restart they start short and grow. It refreshes every 3 s. Close with ×, **Esc**, or by clicking empty map. Size, destination and call sign come from a separate AIS message each ship sends every ~6 min, so they show "--" until it arrives. Small boats (pleasure craft, small fishing boats) carry cheaper "Class B" transponders that never send status, destination, ETA, draught or IMO, so their panel says SMALL CRAFT (AIS CLASS B) and leaves those rows out.
 
 ## Recent changes
+- 2026-09-28: ROUTE TO a ship's destination now zooms out to show the whole route.
 - 2026-09-28: Portfolio round: toolbar (BEARING, ROUTE, CLEAR, SHARE, ?), touch (pinch, double-tap, tap-tap routes, drag-to-measure), shareable links in the address bar, a first-visit demo route, a route panel with fuel/CO₂/cost and a cost-by-speed chart, voyage playback with forecast wind, ROUTE TO a ship's destination with heading/ETA comparison, a "How it works" panel, phone layout, and a link preview image. Planner fix: routes to harbours behind shallows (e.g. New York) no longer fail.
 - 2026-09-28: Route planner upgrades: goes through the Panama/Suez/Kiel canals and keeps narrow straits open, avoids shallow water, uses the wind forecast along the voyage, no longer cuts across headland corners, speed control with fuel-in-tonnes and arrival time, label no longer covers the route.
 - 2026-09-28: Added the fuel-optimal route: hold E, click a destination, and the map plots the cheapest course through live currents and wind, around land, along great circles.
