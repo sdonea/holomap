@@ -9,7 +9,7 @@ import { chromium } from "playwright";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const IMAGE = process.env.IMAGE ?? "today.jpg";
-const IMAGE_URL = process.env.IMAGE_URL ?? "https://raw.githubusercontent.com/sdonea/holomap/daily/today.jpg";
+const IMAGE_URL = process.env.IMAGE_URL ?? "https://github.com/sdonea/holomap/raw/daily/today.jpg";
 const today = new Date().toISOString().slice(0, 10);
 
 const browser = await chromium.launch();
