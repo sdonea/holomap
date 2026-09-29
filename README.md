@@ -5,6 +5,15 @@ planner. Pick two points and it plots the route a ship should sail to burn the l
 ocean currents and the wind forecast, around land and through the canals.
 
 <!-- daily-route:start -->
+### Today's best Gulf Stream trip · 2026-09-29
+
+**Georges Bank to Charleston**: 8.6% less fuel than sailing the straight line (765 NM · 2 D 17 H at 12 kn).
+
+![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-09-29)
+
+<sub>Updated every day by a GitHub Action: it opens the map like a first-time visitor, the planner compares 58
+trips between nine points off the US East Coast on that day's currents, and the biggest saving is shown here.
+Every day's pick is logged in <a href="docs/daily-routes.csv">docs/daily-routes.csv</a>.</sub>
 <!-- daily-route:end -->
 
 ## What it does
