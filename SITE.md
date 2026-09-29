@@ -15,6 +15,24 @@ In the tilted view a sign floats above the table: the COURSE pixel mark (the tab
 and fades when you flatten the view (**T**), since the table fills the screen then. Phones start flat, so they
 don't see it. It's the `<h1>` at the top of the page in `components/Holomap.tsx`.
 
+## Watch it think (setting)
+In the **?** panel, under "How the route planner works → Search", a switch turns on **WATCH IT THINK**. With it
+on, every new route first replays the planner's search in three captioned steps (a box at the top of the table
+says which): **1/3 Spreading out**: cyan dots fill in every spot the ship can reach, fastest first, with white
+rings of equal sailing time (every 1 h to 3 days, picked so a trip shows about six); the rings stretch where the
+current helps and squeeze where it fights. **2/3 Found it**: the fastest chain of dots is traced back from the
+destination in amber. **3/3 Pulled tight**: the final straight-leg route appears over a thin white trail of that
+zig-zag, and everything fades. About 5-8 seconds in all. Off by default; the browser remembers the choice
+(`holomap.think`). The planner records the order in `lib/route.ts` (`search`); the drawing is `drawThinking` in
+`components/Holomap.tsx`.
+
+## README that updates itself
+`.github/workflows/daily-route.yml` runs every day at 15:30 UTC (or on demand from GitHub's Actions tab). It
+builds the site, opens it like a first-time visitor so the demo picks the day's biggest-saving Gulf Stream
+trip, and `scripts/daily-route.mjs` writes that trip, its saving and a screenshot into the README (between the
+`daily-route` markers) and adds a line to `docs/daily-routes.csv`. The screenshot lives on a separate `daily`
+branch that is overwritten each day, so the main history doesn't fill up with images.
+
 ## First visit
 With no link, the table opens on a demo. It compares 58 trips between nine offshore points (Miami, Cape
 Canaveral, Charleston, Cape Hatteras, New York, Georges Bank, Nova Scotia, Bermuda, Abaco) on today's
@@ -148,6 +166,8 @@ The map reads in layers, lit from the upper left:
   - **Click a ship** to open its info panel on the right of the table: type, name, MMSI, status (under way / anchored / moored…), speed, course, heading, destination, ETA, size, draught, call sign, IMO, position and how long ago it last reported, plus a MarineTraffic link. The ship gets corner brackets on the map and its **past course** is drawn behind it: an X at each position it reported over the last 6 hours, joined by straight lines, ending at the ship. The server keeps at most one report per 30 s per ship (one per 10 min while it sits still), and when zoomed out, Xs that would overlap are skipped (the line still passes through them). Tracks are recorded by the server while it runs, so right after a restart they start short and grow. It refreshes every 3 s. Close with ×, **Esc**, or by clicking empty map. Size, destination and call sign come from a separate AIS message each ship sends every ~6 min, so they show "--" until it arrives. Small boats (pleasure craft, small fishing boats) carry cheaper "Class B" transponders that never send status, destination, ETA, draught or IMO, so their panel says SMALL CRAFT (AIS CLASS B) and leaves those rows out.
 
 ## Recent changes
+- 2026-09-29: WATCH IT THINK switch in the ? panel: a captioned three-step replay of the route search (time rings, trace back, pull tight).
+- 2026-09-29: A real README, and a daily GitHub Action that puts the day's best Gulf Stream trip and a screenshot on it.
 - 2026-09-28: Added the HOLOMAP sign (pixel logo + name) above the tilted table; it fades away in the flat view.
 - 2026-09-28: Smoother panning and zooming: the glow on ships, ship clusters and ports is now drawn once per colour instead of once per marker. On a Retina M2 screen this cut the graphics chip's load while panning from 41% to 22%, and the map looks the same.
 - 2026-09-28: Ports on the map (hubs first, more as you zoom), tappable in ROUTE mode to start or end a route exactly at a port.

@@ -1,88 +1,61 @@
-# Static Marketing Site Starter
+# Holomap
 
-Build marketing sites with Claude Code. No coding required.
+A live map of the real ocean, drawn like the holotable in Carrier Command 2, with a fuel-optimal route
+planner. Pick two points and it plots the route a ship should sail to burn the least fuel through today's
+ocean currents and the wind forecast, around land and through the canals.
 
-## What is this?
+<!-- daily-route:start -->
+<!-- daily-route:end -->
 
-A Next.js template designed specifically for building marketing websites with Claude Code inside Ship Studio. Just describe what you want to build, and Claude handles all the code.
+## What it does
 
-## Getting Started
+- **Live ocean.** Drifting streaks are today's surface current (or the 10 m wind): each moves the way the water
+  goes, brighter is faster. Blips are live ships from AIS, coloured by type. Land is real terrain; the sea
+  steps darker with depth.
+- **Fuel-optimal routes.** Tap a start and a destination, or tap two ports. The route panel shows distance,
+  time, arrival, fuel, CO₂ and cost, with a cost-by-speed chart showing why ships slow down when fuel is dear.
+- **Watch it think.** Turn it on in the ? panel and each route is preceded by a captioned replay of the
+  search: rings of equal sailing time (isochrones, the classic weather-routing picture) spread from the start,
+  stretching where the current helps and squeezing where it fights; when the wave reaches the destination the
+  fastest chain of cells is traced back, then pulled tight into the final straight legs.
+- **Real ships vs the optimum.** Click a ship headed for a known port and compare its heading and reported
+  ETA with the optimal route from where it is now.
+- **Voyage playback** with the forecast wind moving past, and **share links** that restore the exact view and route.
 
-1. **Install dependencies**
-   ```bash
-   npm install
-   ```
+## How the planner works
 
-2. **Start the development server**
-   ```bash
-   npm run dev
-   ```
+1. **Fuel model.** Constant engine power, so fuel is proportional to time at sea and the cheapest route is the
+   fastest. Headwind costs 2% of speed per m/s; cross-currents make the ship crab; along-track current adds or
+   subtracts. Burn per day follows speed³.
+2. **Search.** Time-dependent A* on a ~320-cell Mercator grid around both ends, in 16 directions, reading each
+   cell's current and the forecast wind for the hour the ship would get there. Distances are on a sphere.
+3. **Pull tight.** The zig-zag grid path becomes the fewest great-circle legs that are no slower and never touch
+   land, which is why long routes bow toward the pole on the flat map.
+4. **Land and water.** Natural Earth coastlines, water shallower than 15 m is off limits, and the Panama, Suez
+   and Kiel canals and narrow straits are carved back in so a coarse grid can't close them.
 
-3. **Open Claude Code and start building**
+The core is `lib/route.ts`, with runnable checks in `lib/route.check.ts` (straight lines in still water,
+wind and current physics, canals, the date line, the search replay and the demo picker).
 
-   Just describe what you want:
-   - "Create a landing page for my coffee shop"
-   - "I need a portfolio site with a contact form"
-   - "Build a pricing page with three tiers"
+## Data (all free and public)
 
-## Available Commands
+[NOAA CoastWatch](https://coastwatch.noaa.gov/erddap/griddap/noaacwBLENDEDNRTcurrentsDaily.html) surface currents
+(daily) · [NOAA GFS](https://registry.opendata.aws/noaa-gfs-bdp-pds/) wind and 16-day forecast ·
+[aisstream.io](https://aisstream.io) live ships · [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
+land height and sea depth · [Natural Earth](https://www.naturalearthdata.com) coastlines and depth contours.
 
-| Command | Description |
-|---------|-------------|
-| `/onboarding` | Set up a new project. Claude asks about your business and creates a personalized build plan. |
-| `/page-remake` | Rebuild from an example. Share a URL you like, and Claude creates something similar. |
-| `/sanity-cms` | Add editable content. When you want to update text yourself without touching code. |
+## Run it
 
-## How It Works
-
-1. **Start a conversation** - Just type what you want to build
-2. **Claude builds it** - All the code is handled for you
-3. **Refine together** - Ask for changes until it's perfect
-
-## Project Structure
-
-```
-app/
-├── layout.tsx       # Page wrapper (fonts, metadata)
-├── page.tsx         # Homepage
-├── globals.css      # Global styles
-└── [folders]/       # Other pages (about/, contact/, etc.)
-components/          # Reusable pieces
-public/              # Images and files
-```
-
-## Design Philosophy
-
-This starter follows **Human-First Design Principles**:
-
-- **Intentional** - Every design choice has a reason
-- **Distinctive** - Not a copy of common patterns
-- **Memorable** - Something visitors remember
-- **Human** - Warm and approachable
-
-## Documentation
-
-- **CLAUDE.md** - Instructions for Claude Code (how to build your site)
-- **SITE.md** - Your project documentation (created during onboarding)
-
-## Tech Stack
-
-- [Next.js 14+](https://nextjs.org/) - React framework
-- [Tailwind CSS](https://tailwindcss.com/) - Styling
-- [Google Fonts](https://fonts.google.com/) - Typography
-
-## Deploy
-
-Deploy to Vercel with one click:
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
-
-Or deploy manually:
 ```bash
-npm run build
-npm start
+npm install
+npm run dev          # http://localhost:3000
 ```
 
----
+Everything works without keys except live ships: for those, create a free key at aisstream.io and put
+`AISSTREAM_API_KEY=...` in `.env.local`.
 
-Built for use with [Claude Code](https://claude.com/claude-code)
+Checks (Node 22.18+): `npm run typecheck`, `node lib/route.check.ts`, `node lib/ports.check.ts`,
+`node lib/geo.check.ts`; with the dev server up, `node lib/currents.check.ts` and `node lib/wind.check.ts`
+(pass the server's URL if it isn't `http://localhost:3000`).
+
+Built by Sebastian "Seth" Donea.

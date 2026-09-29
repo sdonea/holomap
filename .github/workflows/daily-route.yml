@@ -1,0 +1,46 @@
+# Once a day: build the site, let the first-visit demo pick today's biggest-saving Gulf Stream trip,
+# and put it on the README (scripts/daily-route.mjs). The screenshot goes to the `daily` branch, which
+# holds a single commit that is replaced every day, so main's history doesn't grow by an image a day.
+name: Daily route
+
+on:
+  schedule:
+    - cron: "30 15 * * *" # after NOAA CoastWatch's daily currents update
+  workflow_dispatch: # Actions tab → Daily route → Run workflow
+
+permissions:
+  contents: write
+
+concurrency: daily-route
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm install --no-save playwright && npx playwright install --with-deps chromium
+      - name: Pick today's route
+        run: |
+          npm start -- -p 3000 &
+          IMAGE="$RUNNER_TEMP/today.jpg" node scripts/daily-route.mjs
+      - name: Commit the README to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/daily-routes.csv
+          git commit -m "Daily route $(date -u +%F): $(tail -1 docs/daily-routes.csv | cut -d, -f2)"
+          git push
+      - name: Replace the screenshot on the daily branch
+        run: |
+          git switch --orphan daily
+          cp "$RUNNER_TEMP/today.jpg" today.jpg
+          git add today.jpg
+          git commit -m "Screenshot for $(date -u +%F)"
+          git push --force origin daily
