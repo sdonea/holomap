@@ -20,6 +20,9 @@ for (let i = 0; ; i++) { // the server may still be starting
 await page.getByText("biggest fuel saving").waitFor({ timeout: 180_000 });
 await page.getByText(/FORECAST WIND · TODAY'S CURRENTS|WIND: NOW ONLY/).waitFor({ timeout: 180_000 });
 await page.waitForTimeout(2000); // camera fly-to and label settle
+// Ships stream in over the first minute once the view is subscribed; give them time, but a quiet AIS
+// feed (or no AISSTREAM_API_KEY) must not cost the day's route.
+await page.waitForFunction(() => Number(/SHIPS (\d+)/.exec(document.body.innerText)?.[1]) >= 20, null, { timeout: 60_000 }).catch(() => {});
 await page.screenshot({ path: IMAGE, type: "jpeg", quality: 82 });
 
 const text = await page.evaluate(() => document.body.innerText);

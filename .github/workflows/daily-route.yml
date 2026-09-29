@@ -27,6 +27,8 @@ jobs:
       - run: npm run build
       - run: npm install --no-save playwright && npx playwright install --with-deps chromium
       - name: Pick today's route
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
         run: |
           npm start -- -p 3000 &
           IMAGE="$RUNNER_TEMP/today.jpg" node scripts/daily-route.mjs
