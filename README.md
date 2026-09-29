@@ -27,7 +27,7 @@ draws them on a glowing tactical table, and plans the route that spends the leas
 <!-- daily-route:start -->
 ### Today's best Gulf Stream trip · 2026-09-29
 
-**Georges Bank to Charleston**: 8.6% less fuel than sailing the straight line (765 NM · 2 D 17 H at 12 kn).
+**Georges Bank to Charleston**: 8.9% less fuel than sailing the straight line (780 NM · 2 D 18 H at 12 kn).
 
 ![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-09-29)
 
