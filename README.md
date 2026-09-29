@@ -13,6 +13,8 @@ should sail to burn the least fuel through today's currents and wind.**
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
 ![Data: NOAA](https://img.shields.io/badge/data-NOAA%20%C2%B7%20AIS%20%C2%B7%20Natural%20Earth-0f3257)
 
+**[Open the live map →](https://holomap-eight.vercel.app)**
+
 [Features](#features) · [How the planner works](#how-the-planner-works) · [Under the hood](#under-the-hood) · [Run it](#run-it)
 
 <img src="docs/holomap.gif" width="100%" alt="Holomap: live ocean currents drift across a glowing holotable, a fuel-optimal route is plotted through the Gulf Stream, and the view pulls back to the whole world" />
