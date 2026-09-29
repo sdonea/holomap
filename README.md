@@ -102,4 +102,4 @@ Checks (Node 22.18+): `npm run typecheck`, `node lib/route.check.ts`, `node lib/
 
 ---
 
-<div align="center">Built by Sebastian "Seth" Donea</div>
+<div align="center">Built by Sebastian "Seth" Donea · <a href="LICENSE">MIT License</a></div>
