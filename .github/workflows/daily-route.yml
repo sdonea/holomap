@@ -16,10 +16,10 @@ concurrency: daily-route
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -31,7 +31,12 @@ jobs:
           AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
         run: |
           npm start -- -p 3000 &
-          IMAGE="$RUNNER_TEMP/today.jpg" node scripts/daily-route.mjs
+          # NOAA's servers have bad hours (CoastWatch 502s); wait them out rather than lose the day
+          for i in 1 2 3 4; do
+            IMAGE="$RUNNER_TEMP/today.jpg" node scripts/daily-route.mjs && exit 0
+            [ $i -lt 4 ] && sleep 600
+          done
+          exit 1
       - name: Commit the README to main
         run: |
           git config user.name "github-actions[bot]"
