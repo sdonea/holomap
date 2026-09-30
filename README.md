@@ -44,7 +44,7 @@ Every day's pick is logged in <a href="docs/daily-routes.csv">docs/daily-routes.
 |---|---|
 | **Live ocean** | Drifting streaks are today's surface current, or the 10 m wind: each moves the way the water goes, brighter is faster. Land is real terrain; the sea steps darker with depth. |
 | **Fuel-optimal routes** | Tap a start and a destination (or two of ~160 labelled ports). The route panel shows distance, time, arrival, fuel, CO₂ and cost, plus a cost-by-speed chart that shows why ships slow down when fuel is dear. |
-| **Watch it think** | An opt-in, captioned replay of the search: rings of equal sailing time (isochrones, the classic weather-routing picture) spread from the start, stretching where the current helps and squeezing where it fights; the fastest path is traced back and pulled tight. |
+| **Watch it think** | A captioned replay of the search (on by default, switch it off in the ? panel): rings of equal sailing time (isochrones, the classic weather-routing picture) spread from the start, stretching where the current helps and squeezing where it fights; the fastest path is traced back and pulled tight. |
 | **Real ships vs the optimum** | Click a live ship headed for a known port and compare its heading and reported ETA with the optimal route from where it is now. |
 | **Voyage playback** | Sail the route day by day with the forecast wind moving past. |
 | **Share links** | The address bar always holds the exact view, layer, speed and route. |

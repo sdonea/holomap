@@ -109,7 +109,7 @@ const isochrones = (S: Search, band: number) => {
   return ring;
 };
 const SEEN = "holomap.seen";
-const THINK = "holomap.think";
+const THINK = "holomap.watchThink"; // new key: the old one holds "0" for everyone who visited while it defaulted off
 // Ports on the map, hubs first: a label only draws where it doesn't overlap one drawn before it, so
 // zoomed out you see these, and the rest of lib/ports.ts fills in as you zoom.
 const HUBS = ("SGSIN CNSHA NLRTM USLAX USNYC AEJEA HKHKG KRPUS CNNGB DEHAM BEANR EGPSD PABLB BRSSZ ZADUR LKCMB " +
@@ -138,11 +138,11 @@ export default function Holomap() {
   const [play, setPlay] = useState<PlayState>(NO_PLAY);
   const [market, setMarket] = useState<Market>(DEFAULT_MARKET);
   const [about, setAbout] = useState(false);
-  // "Watch it think" (? panel): replay the planner's search before each route appears. Remembered per browser.
-  const [think, setThink] = useState(false);
-  const thinkRef = useRef(false);
+  // "Watch it think" (? panel): replay the planner's search before each route appears. On unless turned off; remembered per browser.
+  const [think, setThink] = useState(true);
+  const thinkRef = useRef(true);
   useEffect(() => {
-    try { setThink(localStorage.getItem(THINK) === "1"); } catch { /* storage blocked: stays off */ }
+    try { setThink(localStorage.getItem(THINK) !== "0"); } catch { /* storage blocked: stays on */ }
   }, []);
   useEffect(() => {
     thinkRef.current = think;

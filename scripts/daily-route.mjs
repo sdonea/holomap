@@ -14,6 +14,7 @@ const today = new Date().toISOString().slice(0, 10);
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+await page.addInitScript(() => localStorage.setItem("holomap.watchThink", "0")); // no search replay in the screenshot
 for (let i = 0; ; i++) { // the server may still be starting
   try { await page.goto(BASE); break; } catch (e) { if (i > 30) throw e; await page.waitForTimeout(2000); }
 }
