@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { VT323 } from "next/font/google";
 import "./globals.css";
 import { AgentationProvider } from "@/components/AgentationProvider";
+import { Analytics } from "@vercel/analytics/next";
 
 const pixel = VT323({ weight: "400", subsets: ["latin"], variable: "--font-pixel", display: "swap" });
 
@@ -21,6 +22,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className="antialiased">
         {children}
         <AgentationProvider />
+        <Analytics />
       </body>
     </html>
   );
