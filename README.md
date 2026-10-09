@@ -27,11 +27,11 @@ mile takes half again as long. Holomap pulls today's surface currents, the 16-da
 draws them on a glowing tactical table, and plans the route that spends the least time (and so fuel) at sea.
 
 <!-- daily-route:start -->
-### Today's best Gulf Stream trip · 2026-10-08
+### Today's best Gulf Stream trip · 2026-10-09
 
-**Georges Bank to Cape Hatteras**: 5.4% less fuel than sailing the straight line (499 NM · 43 H at 12 kn).
+**Georges Bank to Cape Hatteras**: 8.8% less fuel than sailing the straight line (511 NM · 43 H at 12 kn).
 
-![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-10-08)
+![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-10-09)
 
 <sub>Updated every day by a GitHub Action: it opens the map like a first-time visitor, the planner compares 58
 trips between nine points off the US East Coast on that day's currents, and the biggest saving is shown here.
