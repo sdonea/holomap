@@ -27,11 +27,11 @@ mile takes half again as long. Holomap pulls today's surface currents, the 16-da
 draws them on a glowing tactical table, and plans the route that spends the least time (and so fuel) at sea.
 
 <!-- daily-route:start -->
-### Today's best Gulf Stream trip · 2026-10-21
+### Today's best Gulf Stream trip · 2026-10-22
 
-**Cape Hatteras to Nova Scotia**: 3.5% less fuel than sailing the straight line (728 NM · 2 D 16 H at 12 kn).
+**Cape Hatteras to Nova Scotia**: 0.8% less fuel than sailing the straight line (719 NM · 2 D 17 H at 12 kn).
 
-![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-10-21)
+![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-10-22)
 
 <sub>Updated every day by a GitHub Action: it opens the map like a first-time visitor, the planner compares 58
 trips between nine points off the US East Coast on that day's currents, and the biggest saving is shown here.
