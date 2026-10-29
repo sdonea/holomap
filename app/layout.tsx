@@ -9,6 +9,8 @@ const pixel = VT323({ weight: "400", subsets: ["latin"], variable: "--font-pixel
 const description =
   "A live holotable of the real ocean: today's currents, forecast wind and live ships. Pick two points and it plots the route that burns the least fuel. Built by Sebastian \"Seth\" Donea.";
 export const metadata: Metadata = {
+  metadataBase: new URL("https://holomap.app"),
+  alternates: { canonical: "/" },
   title: "Holomap · live fuel-optimal ship routing",
   description,
   authors: [{ name: 'Sebastian "Seth" Donea' }],
