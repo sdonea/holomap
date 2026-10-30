@@ -32,14 +32,19 @@ await page.screenshot({ path: IMAGE, type: "jpeg", quality: 82 });
 const text = await page.evaluate(() => document.body.innerText);
 await browser.close();
 const trip = text.match(/^(.+?): the biggest fuel saving/m)?.[1];
-const saving = text.match(/−([\d.]+)% FUEL/)?.[1];
+// The demo ranks trips on today's wind; the plotted route uses the forecast, which can wipe out a small
+// saving. Then the panel says DIRECT IS BEST instead of "−X% FUEL", and that's the day's honest result.
+const direct = text.includes("DIRECT IS BEST");
+const saving = direct ? "0" : text.match(/−([\d.]+)% FUEL/)?.[1];
 const leg = text.match(/([\d,.]+ NM · (?:\d+ D )?[\d.]+ H)/)?.[1];
 if (!trip || !saving || !leg) throw new Error(`couldn't read the demo result:\n${text.slice(0, 2000)}`);
 
 const block = `<!-- daily-route:start -->
 ### Today's best Gulf Stream trip · ${today}
 
-**${trip}**: ${saving}% less fuel than sailing the straight line (${leg} at 12 kn).
+${direct
+  ? `**${trip}**: with the forecast wind, the straight line was already the best route today (${leg} at 12 kn).`
+  : `**${trip}**: ${saving}% less fuel than sailing the straight line (${leg} at 12 kn).`}
 
 ![Today's fuel-optimal route through the Gulf Stream](${IMAGE_URL}?d=${today})
 
@@ -52,4 +57,4 @@ const start = readme.indexOf("<!-- daily-route:start -->"), end = readme.indexOf
 if (start < 0 || end < 0) throw new Error("README.md has no daily-route markers");
 await writeFile("README.md", readme.slice(0, start) + block + readme.slice(end + "<!-- daily-route:end -->".length));
 await appendFile("docs/daily-routes.csv", `${today},${trip},${saving},"${leg}"\n`);
-console.log(`${today}: ${trip}, −${saving}% fuel, ${leg}`);
+console.log(`${today}: ${trip}, ${direct ? "direct is best" : `−${saving}% fuel`}, ${leg}`);
