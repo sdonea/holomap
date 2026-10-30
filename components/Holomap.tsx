@@ -803,6 +803,12 @@ export default function Holomap() {
         setRouteInfo(blankInfo("none", kn));
         return;
       }
+      // Fetch the forecast for pass 2 now, so it downloads while the search replays rather than after.
+      const lons = first.pts.map((p) => p[0]), lats = first.pts.map((p) => p[1]);
+      let [w, e] = [Math.min(...lons) - 10, Math.max(...lons) + 10];
+      if (e - w > 180) [w, e] = [-180, 180]; // probably across the date line: take the full width
+      const box = [Math.max(-180, w), Math.max(-89, Math.min(...lats) - 10), Math.min(180, e), Math.min(89, Math.max(...lats) + 10)];
+      const forecast = loadWindForecast(first.hours * 1.3 + 12, box).catch(() => null);
       if (thinkRef.current) { // replay the search in three captioned steps, then let the route appear over it
         const S = first.search, n = S.order.length, dur = Math.min(4500, Math.max(2500, n * 0.12));
         const band = [1, 2, 3, 6, 12, 24, 48, 72].find((h) => h >= first.hours / 6) ?? 96;
@@ -824,11 +830,7 @@ export default function Holomap() {
       }
       show(from, to, first, env0, "refining", "REFINING WITH WIND FORECAST…", ship);
       if (fit && route) flyToFit(route.line);
-      const lons = first.pts.map((p) => p[0]), lats = first.pts.map((p) => p[1]);
-      let [w, e] = [Math.min(...lons) - 10, Math.max(...lons) + 10];
-      if (e - w > 180) [w, e] = [-180, 180]; // probably across the date line: take the full width
-      const box = [Math.max(-180, w), Math.max(-89, Math.min(...lats) - 10), Math.min(180, e), Math.min(89, Math.max(...lats) + 10)];
-      const wind = await loadWindForecast(first.hours * 1.3 + 12, box).catch(() => null);
+      const wind = await forecast;
       if (job !== routeJob) return;
       if (!wind) return show(from, to, first, env0, "done", "WIND: NOW ONLY (NO FORECAST)", ship);
       const env1: Env = { current, wind, knots: kn };
