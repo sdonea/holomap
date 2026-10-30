@@ -19,14 +19,20 @@ async function decode(res: Response, what: string): Promise<Field> {
   };
 }
 
-const grids: Partial<Record<Layer, { field: Field; hour: string }>> = {};
+// One shared download per layer per hour. A caller's signal only stops that caller waiting: every pan/zoom
+// calls refresh(), and aborting the fetch itself restarted the ~1 MB grid each time, so on a slow connection
+// it never finished.
+const grids: Partial<Record<Layer, { p: Promise<Field>; hour: string }>> = {};
 export async function loadGrid(layer: Layer, signal: AbortSignal): Promise<Field> {
   const hour = new Date(Math.round(Date.now() / 3600_000) * 3600_000).toISOString();
-  const hit = grids[layer];
-  if (hit?.hour === hour) return hit.field;
-  const field = await decode(await fetch(layer === "wind" ? "/api/wind" : "/api/currents", { signal }), layer);
-  grids[layer] = { field, hour };
-  return field;
+  let hit = grids[layer];
+  if (hit?.hour !== hour) {
+    const p = fetch(layer === "wind" ? "/api/wind" : "/api/currents").then((r) => decode(r, layer));
+    p.catch(() => { if (grids[layer]?.p === p) delete grids[layer]; }); // failed: let the next call retry
+    grids[layer] = hit = { p, hour };
+  }
+  signal.throwIfAborted();
+  return Promise.race([hit.p, new Promise<never>((_, no) => signal.addEventListener("abort", () => no(signal.reason), { once: true }))]);
 }
 
 // Wind forecast every 6 h from departure until `hours` later (GFS reaches 16 days; past that the last
