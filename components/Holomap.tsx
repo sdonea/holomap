@@ -3,7 +3,7 @@
 import NextImage from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { fromMerc, rhumb, sample, toMerc, type Field } from "@/lib/geo";
-import { loadGrid, loadWindForecast, type Layer } from "@/lib/currents";
+import { loadGrid, loadWindForecast, readyGrid, type Layer } from "@/lib/currents";
 import { bestSaving, gcAt, gcMetres, legSeconds, planRoute, windAt, type Env, type LandMask, type LonLat, type Route, type Search, type WindSeries } from "@/lib/route";
 import { matchDestination, parseAisEta, PORTS, type Port } from "@/lib/ports";
 import { DEFAULT_MARKET, type Market } from "@/lib/economics";
@@ -788,9 +788,13 @@ export default function Holomap() {
       setRoute(empty("PLOTTING ROUTE…"));
       setRouteInfo(blankInfo("plotting", kn));
       if (window.innerWidth > 700) setPanel("route");
-      // Both layers feed the planner whichever one is on screen; a missing one just counts as calm.
+      // Both layers feed the planner whichever one is on screen; a missing one just counts as calm. Today's
+      // wind is used only if it's already here: pass 2 has the forecast anyway, and waiting on a cold wind
+      // grid held the first route back by up to ~15 s.
       const sig = new AbortController().signal;
-      const [current, now] = await Promise.all([loadGrid("ocean", sig).catch(() => null), loadGrid("wind", sig).catch(() => null)]);
+      const today = loadGrid("wind", sig).catch(() => null); // starts it if needed, for the no-forecast fallback
+      const current = await loadGrid("ocean", sig).catch(() => null);
+      const now = readyGrid("wind");
       await new Promise((r) => setTimeout(r, 30)); // let "PLOTTING" paint before the search blocks the thread
       if (job !== routeJob) return;
       const a = fromMerc(...from), b = fromMerc(...to);
@@ -832,7 +836,15 @@ export default function Holomap() {
       if (fit && route) flyToFit(route.line);
       const wind = await forecast;
       if (job !== routeJob) return;
-      if (!wind) return show(from, to, first, env0, "done", "WIND: NOW ONLY (NO FORECAST)", ship);
+      if (!wind) { // no forecast: today's wind is the next best, re-planned if pass 1 went without it
+        const w0 = now ?? (await today);
+        if (job !== routeJob) return;
+        const env: Env = { current, wind: w0 && { start: 0, step: 3600, fields: [w0] }, knots: kn };
+        const r = w0 && !now ? await planRoute(a, b, env, routeLand) : null;
+        if (job !== routeJob) return;
+        const used = r ? env : env0;
+        return show(from, to, r ?? first, used, "done", used.wind ? "WIND: NOW ONLY (NO FORECAST)" : "NO WIND DATA", ship);
+      }
       const env1: Env = { current, wind, knots: kn };
       const r = await planRoute(a, b, env1, routeLand);
       if (job !== routeJob) return;
