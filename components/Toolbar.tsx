@@ -6,6 +6,7 @@ export type Tool = "none" | "bearing" | "route";
 // data-ui keeps the map's drag/click handlers off it.
 export default function Toolbar(props: {
   tool: Tool;
+  beckon: boolean; // ROUTE shimmers amber (the course colour) until it's first used
   hint: string;
   copied: boolean;
   onTool: (t: Tool) => void;
@@ -30,7 +31,12 @@ export default function Toolbar(props: {
         <button type="button" aria-pressed={props.tool === "bearing"} onClick={() => props.onTool(props.tool === "bearing" ? "none" : "bearing")} className={btn(props.tool === "bearing")}>
           BEARING
         </button>
-        <button type="button" aria-pressed={props.tool === "route"} onClick={() => props.onTool(props.tool === "route" ? "none" : "route")} className={btn(props.tool === "route")}>
+        <button
+          type="button"
+          aria-pressed={props.tool === "route"}
+          onClick={() => props.onTool(props.tool === "route" ? "none" : "route")}
+          className={`${btn(props.tool === "route")} ${props.beckon ? "beckon relative overflow-hidden" : ""}`}
+        >
           ROUTE
         </button>
         <button type="button" onClick={props.onClear} className={btn(false)}>CLEAR</button>

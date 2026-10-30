@@ -6,3 +6,33 @@ body {
   color: #9ff0ff;
   overflow: hidden;
 }
+
+/* The toolbar's ROUTE button until it's first used: an amber glow that breathes, and a band of light
+   sweeping across it every few seconds. Reduced motion keeps a steady glow. */
+.beckon {
+  border-color: #ffd27a;
+  color: #fff1d0;
+  text-shadow: 0 0 8px rgba(255, 210, 122, 0.9);
+  box-shadow: 0 0 14px rgba(255, 200, 110, 0.55), inset 0 0 8px rgba(255, 200, 110, 0.3);
+  animation: beckon-glow 2.4s ease-in-out infinite;
+}
+.beckon::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 236, 190, 0.55) 50%, transparent 70%);
+  transform: translateX(-120%);
+  animation: beckon-sweep 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes beckon-glow {
+  50% { box-shadow: 0 0 24px rgba(255, 200, 110, 0.85), inset 0 0 12px rgba(255, 200, 110, 0.45); }
+}
+@keyframes beckon-sweep {
+  0%, 45% { transform: translateX(-120%); }
+  85%, 100% { transform: translateX(120%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .beckon, .beckon::after { animation: none; }
+  .beckon::after { display: none; }
+}

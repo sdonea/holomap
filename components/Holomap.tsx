@@ -87,7 +87,7 @@ const gcBearing = ([lon1, lat1]: LonLat, [lon2, lat2]: LonLat) => {
   const n = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos(dl);
   return ((Math.atan2(e, n) / r) + 360) % 360;
 };
-// First-visit demo: every trip between these offshore points (500 km or more), and the one where today's
+// Demo (only at ?demo, which scripts/daily-route.mjs opens): every trip between these offshore points (500 km or more), and the one where today's
 // Gulf Stream makes the optimal route beat the straight line by the most gets plotted. Usually a
 // southbound trip that swings out around the stream instead of fighting it.
 const DEMO_PTS: [string, LonLat][] = [
@@ -108,7 +108,7 @@ const isochrones = (S: Search, band: number) => {
   }
   return ring;
 };
-const SEEN = "holomap.seen";
+const ROUTED = "holomap.routed"; // set once they've used ROUTE, which stops the button's shimmer
 const THINK = "holomap.watchThink"; // new key: the old one holds "0" for everyone who visited while it defaulted off
 // Ports on the map, hubs first: a label only draws where it doesn't overlap one drawn before it, so
 // zoomed out you see these, and the rest of lib/ports.ts fills in as you zoom.
@@ -149,6 +149,16 @@ export default function Holomap() {
     try { localStorage.setItem(THINK, think ? "1" : "0"); } catch { /* storage blocked: this visit only */ }
   }, [think]);
   const [toolUi, setToolUi] = useState<Tool>("none");
+  // ROUTE shimmers until it's first used (button or R key); remembered per browser.
+  const [beckon, setBeckon] = useState(false);
+  useEffect(() => {
+    try { setBeckon(!localStorage.getItem(ROUTED)); } catch { /* storage blocked: no shimmer */ }
+  }, []);
+  useEffect(() => {
+    if (toolUi !== "route") return;
+    setBeckon(false);
+    try { localStorage.setItem(ROUTED, "1"); } catch { /* storage blocked: this visit only */ }
+  }, [toolUi]);
   const [hint, setHint] = useState("");
   const [copied, setCopied] = useState(false);
   const api = useRef<Api | null>(null);
@@ -374,6 +384,11 @@ export default function Holomap() {
     };
 
     // ---------- current data ----------
+    // Terrain tiles (~1.5 MB on a first view) wait for the current grid so they don't split a slow connection
+    // with it; plain land shows meanwhile. The timer is the fallback if the grid never comes.
+    let terrainGo = false;
+    const startTerrain = () => { if (!terrainGo) { terrainGo = true; dirty = true; } };
+    const terrainTimer = window.setTimeout(startTerrain, 8000);
     let ctrl: AbortController | null = null;
     const setStatus = (s: string) => { if (hud.status.current) hud.status.current.textContent = s; };
     async function refresh() {
@@ -386,11 +401,13 @@ export default function Holomap() {
         const f = await loadGrid(mode, c.signal); // one cached global grid per layer, so pan/zoom costs nothing
         if (c.signal.aborted) return;
         field = f;
+        startTerrain();
         setStatus(!f.time ? "" : mode === "ocean" ? `DATA ${f.time.slice(0, 10)}` : `DATA ${f.time.slice(11, 16)}Z`);
       } catch (e) {
         if (!c.signal.aborted) {
           console.error(e);
           setStatus("DATA OFFLINE");
+          startTerrain();
         }
       }
     }
@@ -1254,6 +1271,7 @@ export default function Holomap() {
     const terrainTile = (z: number, x: number, y: number) => {
       const key = `${z}/${x}/${y}`;
       if (tiles.has(key)) return tiles.get(key)!;
+      if (!terrainGo) return null;
       // ponytail: FIFO eviction (~40 MB of baked tiles); an LRU would re-fetch less when panning back
       if (tiles.size >= 160) for (const old of tiles.keys()) { tiles.delete(old); if (tiles.size < 120) break; }
       tiles.set(key, null);
@@ -1614,10 +1632,8 @@ export default function Holomap() {
       setSpeed(hk);
     }
     const hr = nums("r", 4);
-    let seen = true;
-    try { seen = !!localStorage.getItem(SEEN); localStorage.setItem(SEEN, "1"); } catch { /* storage blocked: no demo */ }
     const pending: [LonLat, LonLat] | null = hr ? [[hr[0], hr[1]], [hr[2], hr[3]]] : null;
-    const demo = !hr && !seen && !location.hash;
+    const demo = !hr && new URLSearchParams(location.search).has("demo");
     if (demo) { // frame all the demo points while they're compared; the winner then gets a fly-to
       const wide = window.innerWidth > 700;
       [view.cx, view.cy] = toMerc(wide ? -67 : -71.5, 34.5);
@@ -1647,7 +1663,9 @@ export default function Holomap() {
       demoHint = true;
       setHint(`Comparing ${DEMO_TRIPS.length} Gulf Stream trips…`);
       const job = routeJob, sig = new AbortController().signal;
-      const [current, now] = await Promise.all([loadGrid("ocean", sig).catch(() => null), loadGrid("wind", sig).catch(() => null)]);
+      // currents first: they're what's on screen, and wind (~0.8 MB) would split a slow connection with them
+      const current = await loadGrid("ocean", sig).catch(() => null);
+      const now = await loadGrid("wind", sig).catch(() => null);
       const env: Env = { current, wind: now && { start: 0, step: 3600, fields: [now] }, knots };
       const best = current ? await bestSaving(DEMO_TRIPS, env, routeLand).catch(() => null) : null;
       if (job !== routeJob || !demoHint) return; // they started using the map meanwhile: leave it to them
@@ -1845,6 +1863,7 @@ export default function Holomap() {
       routeJob++;
       cancelAnimationFrame(raf);
       clearTimeout(fetchTimer);
+      clearTimeout(terrainTimer);
       clearInterval(every15);
       clearInterval(every3);
       clearTimeout(shipTimer);
@@ -2141,6 +2160,7 @@ export default function Holomap() {
 
             <Toolbar
               tool={toolUi}
+              beckon={beckon}
               hint={hint}
               copied={copied}
               onTool={(t) => api.current?.setTool(t)}

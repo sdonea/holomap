@@ -3,6 +3,7 @@ import { VT323 } from "next/font/google";
 import "./globals.css";
 import { AgentationProvider } from "@/components/AgentationProvider";
 import { Analytics } from "@vercel/analytics/next";
+import { preload } from "react-dom";
 
 const pixel = VT323({ weight: "400", subsets: ["latin"], variable: "--font-pixel", display: "swap" });
 
@@ -19,6 +20,8 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  // Start the ~1 MB current grid with the HTML instead of after the JS runs; lib/currents.ts picks it up.
+  preload("/api/currents", { as: "fetch", crossOrigin: "anonymous" });
   return (
     <html lang="en" className={pixel.variable}>
       <body className="antialiased">

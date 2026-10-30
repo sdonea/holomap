@@ -1,5 +1,5 @@
 // Daily README update (run by .github/workflows/daily-route.yml, or by hand against a running site):
-// opens the map as a first-time visitor, lets the demo pick today's biggest-saving Gulf Stream trip,
+// opens the map at ?demo, lets the demo pick today's biggest-saving Gulf Stream trip,
 // saves a screenshot, rewrites the block between the daily-route markers in README.md and appends a
 // line to docs/daily-routes.csv. Exits non-zero if the demo never finishes, so a bad day commits nothing.
 //
@@ -14,9 +14,12 @@ const today = new Date().toISOString().slice(0, 10);
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
-await page.addInitScript(() => localStorage.setItem("holomap.watchThink", "0")); // no search replay in the screenshot
+await page.addInitScript(() => { // no search replay and no ROUTE shimmer in the screenshot
+  localStorage.setItem("holomap.watchThink", "0");
+  localStorage.setItem("holomap.routed", "1");
+});
 for (let i = 0; ; i++) { // the server may still be starting
-  try { await page.goto(BASE); break; } catch (e) { if (i > 30) throw e; await page.waitForTimeout(2000); }
+  try { await page.goto(`${BASE}/?demo`); break; } catch (e) { if (i > 30) throw e; await page.waitForTimeout(2000); }
 }
 await page.getByText("biggest fuel saving").waitFor({ timeout: 180_000 });
 await page.getByText(/FORECAST WIND · TODAY'S CURRENTS|WIND: NOW ONLY/).waitFor({ timeout: 180_000 });
@@ -40,7 +43,7 @@ const block = `<!-- daily-route:start -->
 
 ![Today's fuel-optimal route through the Gulf Stream](${IMAGE_URL}?d=${today})
 
-<sub>Updated every day by a GitHub Action: it opens the map like a first-time visitor, the planner compares 58
+<sub>Updated every day by a GitHub Action: it opens the map in demo mode (/?demo), the planner compares 58
 trips between nine points off the US East Coast on that day's currents, and the biggest saving is shown here.
 Every day's pick is logged in <a href="docs/daily-routes.csv">docs/daily-routes.csv</a>.</sub>
 <!-- daily-route:end -->`;

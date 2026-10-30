@@ -33,7 +33,7 @@ draws them on a glowing tactical table, and plans the route that spends the leas
 
 ![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-10-28)
 
-<sub>Updated every day by a GitHub Action: it opens the map like a first-time visitor, the planner compares 58
+<sub>Updated every day by a GitHub Action: it opens the map in demo mode (/?demo), the planner compares 58
 trips between nine points off the US East Coast on that day's currents, and the biggest saving is shown here.
 Every day's pick is logged in <a href="docs/daily-routes.csv">docs/daily-routes.csv</a>.</sub>
 <!-- daily-route:end -->
