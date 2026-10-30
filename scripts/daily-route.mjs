@@ -1,7 +1,8 @@
 // Daily README update (run by .github/workflows/daily-route.yml, or by hand against a running site):
 // opens the map at ?demo, lets the demo pick today's biggest-saving Gulf Stream trip,
 // saves a screenshot, rewrites the block between the daily-route markers in README.md and appends a
-// line to docs/daily-routes.csv. Exits non-zero if the demo never finishes, so a bad day commits nothing.
+// line to docs/daily-routes.csv. Exits non-zero if the demo never finishes, so a bad day commits nothing:
+// 1 for errors worth retrying (site or data not ready), 2 when the page loaded but its result didn't parse.
 //
 //   BASE_URL=http://localhost:3000 IMAGE=/tmp/today.jpg node scripts/daily-route.mjs
 import { appendFile, readFile, writeFile } from "node:fs/promises";
@@ -37,7 +38,10 @@ const trip = text.match(/^(.+?): the biggest fuel saving/m)?.[1];
 const direct = text.includes("DIRECT IS BEST");
 const saving = direct ? "0" : text.match(/−([\d.]+)% FUEL/)?.[1];
 const leg = text.match(/([\d,.]+ NM · (?:\d+ D )?[\d.]+ H)/)?.[1];
-if (!trip || !saving || !leg) throw new Error(`couldn't read the demo result:\n${text.slice(0, 2000)}`);
+if (!trip || !saving || !leg) { // the page loaded but didn't read as expected: retrying won't change that
+  console.error(`couldn't read the demo result:\n${text.slice(0, 2000)}`);
+  process.exit(2);
+}
 
 const block = `<!-- daily-route:start -->
 ### Today's best Gulf Stream trip · ${today}

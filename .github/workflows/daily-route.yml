@@ -33,7 +33,10 @@ jobs:
           npm start -- -p 3000 &
           # NOAA's servers have bad hours (CoastWatch 502s); wait them out rather than lose the day
           for i in 1 2 3 4; do
-            IMAGE="$RUNNER_TEMP/today.jpg" node scripts/daily-route.mjs && exit 0
+            code=0
+            IMAGE="$RUNNER_TEMP/today.jpg" node scripts/daily-route.mjs || code=$?
+            [ $code -eq 0 ] && exit 0
+            [ $code -eq 2 ] && exit 2 # the page loaded but didn't parse: waiting won't change it
             [ $i -lt 4 ] && sleep 600
           done
           exit 1
