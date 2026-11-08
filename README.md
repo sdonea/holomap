@@ -27,11 +27,11 @@ mile takes half again as long. Holomap pulls today's surface currents, the 16-da
 draws them on a glowing tactical table, and plans the route that spends the least time (and so fuel) at sea.
 
 <!-- daily-route:start -->
-### Today's best Gulf Stream trip · 2026-11-07
+### Today's best Gulf Stream trip · 2026-11-08
 
-**Nova Scotia to Abaco**: 2.3% less fuel than sailing the straight line (1,206 NM · 4 D 8 H at 12 kn).
+**Nova Scotia to Charleston**: 9.5% less fuel than sailing the straight line (991 NM · 3 D 21 H at 12 kn).
 
-![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-11-07)
+![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-11-08)
 
 <sub>Updated every day by a GitHub Action: it opens the map in demo mode (/?demo), the planner compares 58
 trips between nine points off the US East Coast on that day's currents, and the biggest saving is shown here.
