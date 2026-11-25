@@ -29,7 +29,7 @@ draws them on a glowing tactical table, and plans the route that spends the leas
 <!-- daily-route:start -->
 ### Today's best Gulf Stream trip · 2026-11-25
 
-**Nova Scotia to Charleston**: with the forecast wind, the straight line was already the best route today (972 NM · 3 D 16 H at 12 kn).
+**Nova Scotia to Charleston**: 0.8% less fuel than sailing the straight line (984 NM · 3 D 20 H at 12 kn).
 
 ![Today's fuel-optimal route through the Gulf Stream](https://github.com/sdonea/holomap/raw/daily/today.jpg?d=2026-11-25)
 
